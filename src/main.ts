@@ -296,6 +296,7 @@ class WaveformRenderer {
 let deviceSelect: HTMLSelectElement | null;
 let recordBtn: HTMLButtonElement | null;
 let monitorToggle: HTMLInputElement | null;
+let processingToggle: HTMLInputElement | null;
 let statusEl: HTMLElement | null;
 let resultEl: HTMLElement | null;
 let modelWarning: HTMLElement | null;
@@ -307,6 +308,7 @@ let closeBtn: HTMLButtonElement | null;
 
 let isRecording = false;
 let isMonitoring = false;
+let isProcessingEnabled = false;
 let wasMonitoringBeforeRecording = false;
 let waveformRenderer: WaveformRenderer | null = null;
 let audioSamplesUnlisten: UnlistenFn | null = null;
@@ -338,6 +340,9 @@ async function loadDevices() {
       }
       if (monitorToggle) {
         monitorToggle.disabled = false;
+      }
+      if (processingToggle) {
+        processingToggle.disabled = false;
       }
     }
   } catch (error) {
@@ -444,6 +449,21 @@ export function cleanupTranscriptionListeners() {
   if (transcriptionErrorUnlisten) {
     transcriptionErrorUnlisten();
     transcriptionErrorUnlisten = null;
+  }
+}
+
+async function toggleProcessing() {
+  if (!processingToggle) return;
+
+  const newState = processingToggle.checked;
+  try {
+    await invoke("set_processing_enabled", { enabled: newState });
+    isProcessingEnabled = newState;
+    console.log(`Voice processing ${isProcessingEnabled ? "enabled" : "disabled"}`);
+  } catch (error) {
+    console.error("Toggle processing error:", error);
+    // Revert toggle on error
+    processingToggle.checked = !newState;
   }
 }
 
@@ -604,6 +624,7 @@ window.addEventListener("DOMContentLoaded", () => {
   deviceSelect = document.querySelector("#device-select");
   recordBtn = document.querySelector("#record-btn");
   monitorToggle = document.querySelector("#monitor-toggle");
+  processingToggle = document.querySelector("#processing-toggle");
   statusEl = document.querySelector("#status");
   resultEl = document.querySelector("#transcription-result");
   modelWarning = document.querySelector("#model-warning");
@@ -639,6 +660,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   recordBtn?.addEventListener("click", toggleRecording);
   monitorToggle?.addEventListener("change", toggleMonitor);
+  processingToggle?.addEventListener("change", toggleProcessing);
   downloadModelBtn?.addEventListener("click", downloadModel);
   closeBtn?.addEventListener("click", async (e) => {
     e.preventDefault();

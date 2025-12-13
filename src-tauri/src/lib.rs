@@ -1,4 +1,5 @@
 mod audio;
+mod processor;
 mod transcribe;
 
 use audio::{AudioDevice, RecordingState};
@@ -120,6 +121,16 @@ fn is_monitoring(state: State<AppState>) -> bool {
 }
 
 #[tauri::command]
+fn set_processing_enabled(enabled: bool, state: State<AppState>) {
+    state.recording.set_processing_enabled(enabled);
+}
+
+#[tauri::command]
+fn is_processing_enabled(state: State<AppState>) -> bool {
+    state.recording.is_processing_enabled()
+}
+
+#[tauri::command]
 fn transcribe(audio_data: Vec<f32>, state: State<AppState>) -> Result<String, String> {
     let mut transcriber = state.transcriber.lock().unwrap();
     transcriber.transcribe(&audio_data)
@@ -167,6 +178,8 @@ pub fn run() {
             start_monitor,
             stop_monitor,
             is_monitoring,
+            set_processing_enabled,
+            is_processing_enabled,
             transcribe,
             check_model_status,
             download_model,

@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
+use crate::processor::{AudioProcessor, SilenceDetector};
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AudioDevice {
     pub id: String,
@@ -37,6 +39,10 @@ struct AudioStreamState {
     visualization_samples: Vec<f32>,
     is_monitoring: bool,
     
+    // Processing state
+    is_processing_enabled: bool,
+    processor: Option<Box<dyn AudioProcessor>>,
+    
     // Stream control
     stream_active: bool,
 }
@@ -58,6 +64,8 @@ impl RecordingState {
                 is_recording: false,
                 visualization_samples: Vec::with_capacity(512),
                 is_monitoring: false,
+                is_processing_enabled: false,
+                processor: Some(Box::new(SilenceDetector::new())),
                 stream_active: false,
             })),
             stop_signal: Arc::new(Mutex::new(false)),
@@ -71,6 +79,19 @@ impl RecordingState {
 
     pub fn is_monitoring(&self) -> bool {
         self.state.lock().unwrap().is_monitoring
+    }
+
+    pub fn is_processing_enabled(&self) -> bool {
+        self.state.lock().unwrap().is_processing_enabled
+    }
+
+    pub fn set_processing_enabled(&self, enabled: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.is_processing_enabled = enabled;
+        // Reset processor state when enabling
+        if enabled {
+            state.processor = Some(Box::new(SilenceDetector::new()));
+        }
     }
 }
 
@@ -313,18 +334,18 @@ fn process_audio_samples(
             audio_state.recording_samples.extend_from_slice(samples);
         }
 
+        // Convert to mono if needed (used for visualization and processing)
+        let mono_samples: Vec<f32> = if channels > 1 {
+            samples
+                .chunks(channels)
+                .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+                .collect()
+        } else {
+            samples.to_vec()
+        };
+
         // Process for visualization if monitoring
         if audio_state.is_monitoring {
-            // Convert to mono if needed
-            let mono_samples: Vec<f32> = if channels > 1 {
-                samples
-                    .chunks(channels)
-                    .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
-                    .collect()
-            } else {
-                samples.to_vec()
-            };
-
             audio_state.visualization_samples.extend(&mono_samples);
 
             // Emit when we have enough samples (~256 samples for low latency)
@@ -335,6 +356,13 @@ fn process_audio_samples(
                     samples: samples_to_emit,
                 };
                 let _ = app_handle.emit("audio-samples", payload);
+            }
+        }
+
+        // Run audio processor if enabled and monitoring is active
+        if audio_state.is_monitoring && audio_state.is_processing_enabled {
+            if let Some(ref mut processor) = audio_state.processor {
+                processor.process(&mono_samples);
             }
         }
     }
