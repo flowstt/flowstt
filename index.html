@@ -11,7 +11,10 @@
   <body>
     <main class="container">
       <button id="close-btn" class="close-btn" title="Close">&times;</button>
-      <h1 data-tauri-drag-region>FlowSTT</h1>
+      <header class="app-header" data-tauri-drag-region>
+        <img src="/src/assets/flowstt-landscape.svg" alt="FlowSTT" class="app-logo" />
+        <span class="app-version">v0.1.0</span>
+      </header>
 
       <div id="model-warning" class="warning hidden">
         <p>Whisper model not found.</p>

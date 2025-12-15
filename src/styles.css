@@ -5,7 +5,7 @@
   font-weight: 400;
 
   color: #f6f6f6;
-  background: linear-gradient(145deg, #1e2433 0%, #141a24 50%, #1a2230 100%);
+  background: linear-gradient(145deg, #0d1118 0%, #141a24 50%, #1e2433 100%);
   min-height: 100vh;
 
   font-synthesis: none;
@@ -73,18 +73,32 @@ body {
   background: transparent;
 }
 
-h1 {
-  text-align: center;
-  margin: 0;
+/* App header */
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0.5rem;
+  margin-top: 1rem;
   cursor: grab;
   user-select: none;
-  padding: 0.25rem;
-  font-size: 1.25rem;
   flex-shrink: 0;
 }
 
-h1:active {
+.app-header:active {
   cursor: grabbing;
+}
+
+.app-logo {
+  height: 40px;
+  width: auto;
+  pointer-events: none;
+}
+
+.app-version {
+  font-size: 1.1rem;
+  color: #888;
+  font-weight: 500;
 }
 
 h2 {
@@ -97,14 +111,14 @@ h2 {
 .visualization-row {
   display: flex;
   gap: 0.5rem;
-  flex: 2;
-  min-height: 120px;
+  flex: 1.45;
+  min-height: 85px;
 }
 
 .waveform-area,
 .spectrogram-area {
   flex: 1;
-  min-height: 120px;
+  min-height: 85px;
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid #3a4555;

@@ -1,4 +1,8 @@
-# FlowSTT
+<picture>
+  <source srcset="assets/flowstt-portrait.svg" media="(prefers-color-scheme: dark)">
+  <source srcset="assets/flowstt-portrait-light.svg" media="(prefers-color-scheme: light)">
+  <img src="assets/flowstt-portrait.svg" alt="FlowSTT logo">
+</picture>
 
 A desktop application for speech-to-text transcription using local Whisper inference.
 
