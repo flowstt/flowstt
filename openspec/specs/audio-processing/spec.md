@@ -3,34 +3,11 @@
 ## Purpose
 TBD - created by archiving change add-voice-processing-monitor. Update Purpose after archive.
 ## Requirements
-### Requirement: Voice Processing Toggle
-The system SHALL provide a toggle to enable or disable voice processing independently of the monitor toggle.
-
-#### Scenario: Toggle enabled while not monitoring
-- **WHEN** the user enables the voice processing toggle while monitoring is inactive
-- **THEN** the toggle state is saved but no processing occurs
-
-#### Scenario: Toggle enabled while monitoring
-- **WHEN** the user enables the voice processing toggle while monitoring is active
-- **THEN** audio processing begins immediately on incoming samples
-
-#### Scenario: Toggle disabled while processing
-- **WHEN** the user disables the voice processing toggle while processing is active
-- **THEN** audio processing stops immediately
-
-#### Scenario: Monitoring starts with processing enabled
-- **WHEN** the user starts monitoring and voice processing toggle is already enabled
-- **THEN** audio processing begins immediately with the audio stream
-
-#### Scenario: Monitoring stops with processing enabled
-- **WHEN** the user stops monitoring while voice processing is enabled
-- **THEN** audio processing stops (no samples to process) but the toggle remains enabled
-
 ### Requirement: Extensible Audio Processor Architecture
-The system SHALL provide a trait-based architecture for audio processors, allowing new processor types to be added without modifying the core audio pipeline. Processors MAY emit events to the frontend via an `AppHandle` parameter.
+The system SHALL provide a trait-based architecture for audio processors, allowing new processor types to be added without modifying the core audio pipeline. Processors MAY emit events to the frontend via an `AppHandle` parameter. Audio processors run automatically whenever monitoring or recording is active.
 
 #### Scenario: Processor receives samples during monitoring
-- **WHEN** monitoring is active and voice processing is enabled
+- **WHEN** monitoring or recording is active
 - **THEN** the active processor receives audio samples and an AppHandle reference in the audio callback
 
 #### Scenario: Processor executes without blocking
@@ -57,7 +34,7 @@ The system SHALL include a silence detection processor that identifies periods o
 - **THEN** the processor does not log repeated messages
 
 ### Requirement: Speech Detection Events
-The system SHALL emit events when speech activity transitions occur, indicating when the user starts and stops speaking. Speech detection SHALL use multi-feature analysis including amplitude, zero-crossing rate, and spectral characteristics to distinguish speech from non-speech audio. The detector SHALL support both voiced and whispered speech through dual-mode detection.
+The system SHALL emit events when speech activity transitions occur, indicating when the user starts and stops speaking. Speech detection SHALL use multi-feature analysis including amplitude, zero-crossing rate, and spectral characteristics to distinguish speech from non-speech audio. The detector SHALL support both voiced and whispered speech through dual-mode detection. Speech detection runs automatically when monitoring or recording is active.
 
 #### Scenario: Voiced speech starts
 - **WHEN** audio meets voiced speech criteria (amplitude > -40dB, ZCR 0.01-0.20, spectral centroid 250-4000 Hz) for the configured onset time (100ms)
@@ -74,10 +51,6 @@ The system SHALL emit events when speech activity transitions occur, indicating 
 #### Scenario: Brief pause during speech
 - **WHEN** audio amplitude briefly falls below threshold but returns above threshold before hold time elapses
 - **THEN** no `speech-ended` event is emitted (debouncing prevents false triggers)
-
-#### Scenario: Processing disabled
-- **WHEN** voice processing is disabled via toggle
-- **THEN** no speech detection events are emitted
 
 #### Scenario: Keyboard click rejected
 - **WHEN** a brief impulsive sound like a keyboard click produces high amplitude with ZCR > 0.40 and spectral centroid > 5500 Hz
@@ -173,4 +146,23 @@ The system SHALL include a dedicated whisper detection mode with parameters tune
 #### Scenario: Whisper to voiced transition
 - **WHEN** the user transitions from whispering to normal speech
 - **THEN** the speech session continues without interruption
+
+### Requirement: Echo Cancellation Toggle
+The system SHALL provide a toggle to enable or disable acoustic echo cancellation. When enabled, echo cancellation is applied during mixed-mode audio capture to remove system audio feedback from the microphone input.
+
+#### Scenario: Toggle enabled in mixed mode
+- **WHEN** the user enables the echo cancellation toggle and both microphone and system audio sources are active
+- **THEN** acoustic echo cancellation is applied to the microphone signal using system audio as reference
+
+#### Scenario: Toggle enabled in single-source mode
+- **WHEN** the user enables the echo cancellation toggle but only one audio source is active
+- **THEN** the toggle state is saved but no echo cancellation is applied (not needed for single source)
+
+#### Scenario: Toggle disabled
+- **WHEN** the user disables the echo cancellation toggle
+- **THEN** audio is mixed without echo cancellation (simple additive mixing)
+
+#### Scenario: Toggle state persists across source changes
+- **WHEN** the user changes audio sources while echo cancellation is enabled
+- **THEN** echo cancellation continues to apply if the new configuration has both sources active
 

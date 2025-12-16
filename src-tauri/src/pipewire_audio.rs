@@ -26,6 +26,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use aec3::voip::VoipAec3;
 use crate::audio::AudioSourceType;
 
 /// Audio device information from PipeWire
@@ -71,11 +72,14 @@ pub struct PipeWireBackend {
     _thread_handle: JoinHandle<()>,
     /// Sample rate from PipeWire
     sample_rate: Arc<Mutex<u32>>,
+    /// Echo cancellation enabled flag (shared with mixer, kept for lifetime)
+    #[allow(dead_code)]
+    aec_enabled: Arc<Mutex<bool>>,
 }
 
 impl PipeWireBackend {
-    /// Create and start the PipeWire backend
-    pub fn new() -> Result<Self, String> {
+    /// Create and start the PipeWire backend with shared AEC enabled flag
+    pub fn new(aec_enabled: Arc<Mutex<bool>>) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (audio_tx, audio_rx) = mpsc::channel();
         let input_devices = Arc::new(Mutex::new(Vec::new()));
@@ -85,6 +89,7 @@ impl PipeWireBackend {
         let input_devices_clone = Arc::clone(&input_devices);
         let system_devices_clone = Arc::clone(&system_devices);
         let sample_rate_clone = Arc::clone(&sample_rate);
+        let aec_enabled_clone = Arc::clone(&aec_enabled);
 
         let thread_handle = thread::spawn(move || {
             if let Err(e) = run_pipewire_thread(
@@ -93,6 +98,7 @@ impl PipeWireBackend {
                 input_devices_clone,
                 system_devices_clone,
                 sample_rate_clone,
+                aec_enabled_clone,
             ) {
                 eprintln!("PipeWire thread error: {}", e);
             }
@@ -108,6 +114,7 @@ impl PipeWireBackend {
             system_devices,
             _thread_handle: thread_handle,
             sample_rate,
+            aec_enabled,
         })
     }
 
@@ -154,11 +161,16 @@ impl PipeWireBackend {
 
 }
 
+
+
+/// AEC3 frame size: 10ms at 48kHz = 480 samples per channel
+const AEC_FRAME_SAMPLES: usize = 480;
+
 /// Mixer state for combining audio from multiple streams
 struct AudioMixer {
-    /// Buffer for stream 1 samples
+    /// Buffer for stream 1 samples (microphone/input)
     buffer1: Vec<f32>,
-    /// Buffer for stream 2 samples
+    /// Buffer for stream 2 samples (system audio/reference)
     buffer2: Vec<f32>,
     /// Number of active streams (1 or 2)
     num_streams: usize,
@@ -166,16 +178,22 @@ struct AudioMixer {
     channels: u16,
     /// Output sender
     output_tx: mpsc::Sender<PwAudioSamples>,
+    /// Flag to enable/disable AEC (shared with main thread)
+    aec_enabled: Arc<Mutex<bool>>,
+    /// AEC3 pipeline (created when in mixed mode with 2 streams)
+    aec: Option<VoipAec3>,
 }
 
 impl AudioMixer {
-    fn new(output_tx: mpsc::Sender<PwAudioSamples>) -> Self {
+    fn new(output_tx: mpsc::Sender<PwAudioSamples>, aec_enabled: Arc<Mutex<bool>>) -> Self {
         Self {
             buffer1: Vec::new(),
             buffer2: Vec::new(),
             num_streams: 0,
             channels: 2,
             output_tx,
+            aec_enabled,
+            aec: None,
         }
     }
 
@@ -183,13 +201,34 @@ impl AudioMixer {
         self.num_streams = num;
         self.buffer1.clear();
         self.buffer2.clear();
+        
+        // Create AEC3 pipeline when in mixed mode (2 streams)
+        if num == 2 {
+            match VoipAec3::builder(48000, self.channels as usize, self.channels as usize)
+                .enable_high_pass(true)
+                .build()
+            {
+                Ok(aec) => {
+                    println!("AEC3 initialized: 48kHz, {} channels, {}ms frames", 
+                        self.channels, 
+                        AEC_FRAME_SAMPLES * 1000 / 48000);
+                    self.aec = Some(aec);
+                }
+                Err(e) => {
+                    eprintln!("Failed to initialize AEC3: {:?}", e);
+                    self.aec = None;
+                }
+            }
+        } else {
+            self.aec = None;
+        }
     }
 
     fn set_channels(&mut self, channels: u16) {
         self.channels = channels;
     }
 
-    /// Add samples from stream 1
+    /// Add samples from stream 1 (microphone/input device)
     fn push_stream1(&mut self, samples: &[f32]) {
         if self.num_streams == 1 {
             // Only one stream - send directly
@@ -204,7 +243,7 @@ impl AudioMixer {
         }
     }
 
-    /// Add samples from stream 2
+    /// Add samples from stream 2 (system audio/reference)
     fn push_stream2(&mut self, samples: &[f32]) {
         if self.num_streams <= 1 {
             return; // Shouldn't happen, but ignore
@@ -215,29 +254,70 @@ impl AudioMixer {
 
     /// Try to mix available samples and send
     fn try_mix_and_send(&mut self) {
-        // Mix the minimum available samples from both buffers
-        let mix_count = std::cmp::min(self.buffer1.len(), self.buffer2.len());
+        let aec_enabled = *self.aec_enabled.lock().unwrap();
         
-        if mix_count == 0 {
-            return;
+        // AEC3 requires exactly frame_samples * channels samples per frame
+        let frame_size = AEC_FRAME_SAMPLES * self.channels as usize;
+        
+        // Minimum samples needed: one full frame for AEC, or any aligned amount without
+        let min_samples = if aec_enabled && self.aec.is_some() {
+            frame_size
+        } else {
+            self.channels as usize // At least one sample per channel
+        };
+        
+        // Process frames while we have enough data
+        while self.buffer1.len() >= min_samples && self.buffer2.len() >= min_samples {
+            let process_count = if aec_enabled && self.aec.is_some() {
+                frame_size
+            } else {
+                // Without AEC, process all available (aligned to channels)
+                let available = std::cmp::min(self.buffer1.len(), self.buffer2.len());
+                (available / self.channels as usize) * self.channels as usize
+            };
+            
+            if process_count == 0 {
+                break;
+            }
+            
+            // Extract interleaved samples to process
+            let mic_samples: Vec<f32> = self.buffer1.drain(0..process_count).collect();
+            let ref_samples: Vec<f32> = self.buffer2.drain(0..process_count).collect();
+            
+            // Apply AEC if enabled
+            let processed_mic = if aec_enabled {
+                if let Some(ref mut aec) = self.aec {
+                    let mut out = vec![0.0f32; mic_samples.len()];
+                    
+                    // Process capture (mic) with render (system audio) as reference
+                    // The render frame is what's being played through speakers
+                    // The capture frame is what the mic picks up (including echo)
+                    match aec.process(&mic_samples, Some(&ref_samples), false, &mut out) {
+                        Ok(_metrics) => out,
+                        Err(e) => {
+                            eprintln!("AEC3 process error: {:?}", e);
+                            mic_samples
+                        }
+                    }
+                } else {
+                    mic_samples
+                }
+            } else {
+                mic_samples
+            };
+            
+            // Mix processed mic with system audio (0.5 gain each to prevent clipping)
+            let mixed: Vec<f32> = processed_mic.iter()
+                .zip(ref_samples.iter())
+                .map(|(&s1, &s2)| (s1 + s2) * 0.5)
+                .collect();
+            
+            // Send mixed output
+            let _ = self.output_tx.send(PwAudioSamples {
+                samples: mixed,
+                channels: self.channels,
+            });
         }
-        
-        // Mix with 0.5 gain each to prevent clipping
-        let mixed: Vec<f32> = self.buffer1.iter()
-            .zip(self.buffer2.iter())
-            .take(mix_count)
-            .map(|(&s1, &s2)| (s1 + s2) * 0.5)
-            .collect();
-        
-        // Remove processed samples from buffers
-        self.buffer1.drain(0..mix_count);
-        self.buffer2.drain(0..mix_count);
-        
-        // Send mixed output
-        let _ = self.output_tx.send(PwAudioSamples {
-            samples: mixed,
-            channels: self.channels,
-        });
     }
 }
 
@@ -264,6 +344,7 @@ fn run_pipewire_thread(
     input_devices: Arc<Mutex<Vec<PwAudioDevice>>>,
     system_devices: Arc<Mutex<Vec<PwAudioDevice>>>,
     sample_rate: Arc<Mutex<u32>>,
+    aec_enabled: Arc<Mutex<bool>>,
 ) -> Result<(), String> {
     // Initialize PipeWire
     pipewire::init();
@@ -340,8 +421,8 @@ fn run_pipewire_thread(
         })
         .register();
 
-    // Create mixer
-    let mixer = Rc::new(RefCell::new(AudioMixer::new(audio_tx)));
+    // Create mixer with AEC enabled flag
+    let mixer = Rc::new(RefCell::new(AudioMixer::new(audio_tx, aec_enabled)));
 
     // Thread state - share system_map to know which IDs are sinks
     let state = Rc::new(RefCell::new(PwThreadState {

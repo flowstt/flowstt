@@ -1,4 +1,6 @@
+use hound::{WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 
@@ -48,8 +50,7 @@ pub struct AudioStreamState {
     // Visualization processor (always runs when monitoring)
     pub visualization_processor: Option<VisualizationProcessor>,
     
-    // Speech processing state (controlled by toggle)
-    pub is_processing_enabled: bool,
+    // Speech processor (always runs when monitoring)
     pub speech_processor: Option<Box<dyn AudioProcessor>>,
     
     // Stream control
@@ -75,7 +76,6 @@ impl RecordingState {
                 is_recording: false,
                 is_monitoring: false,
                 visualization_processor: None,
-                is_processing_enabled: false,
                 speech_processor: None,
                 stream_active: false,
                 source_type: AudioSourceType::Input,
@@ -91,21 +91,6 @@ impl RecordingState {
         self.state.lock().unwrap().is_monitoring
     }
 
-    pub fn is_processing_enabled(&self) -> bool {
-        self.state.lock().unwrap().is_processing_enabled
-    }
-
-    pub fn set_processing_enabled(&self, enabled: bool) {
-        let mut state = self.state.lock().unwrap();
-        state.is_processing_enabled = enabled;
-        // Reset processor state when enabling
-        if enabled {
-            // Use current sample rate if available, otherwise default to 48000
-            let sample_rate = if state.sample_rate > 0 { state.sample_rate } else { 48000 };
-            state.speech_processor = Some(Box::new(SpeechDetector::new(sample_rate)));
-        }
-    }
-
     /// Initialize for PipeWire capture with given sample rate and channels
     pub fn init_for_capture(&self, sample_rate: u32, channels: u16, source_type: AudioSourceType) {
         let mut state = self.state.lock().unwrap();
@@ -113,6 +98,8 @@ impl RecordingState {
         state.channels = channels;
         state.source_type = source_type;
         state.stream_active = true;
+        // Initialize speech processor with current sample rate
+        state.speech_processor = Some(Box::new(SpeechDetector::new(sample_rate)));
     }
 
     /// Mark capture as stopped
@@ -165,8 +152,8 @@ fn process_audio_samples(
             }
         }
 
-        // Run speech processor if enabled and monitoring is active
-        if audio_state.is_monitoring && audio_state.is_processing_enabled {
+        // Run speech processor when monitoring is active (always on)
+        if audio_state.is_monitoring {
             if let Some(ref mut processor) = audio_state.speech_processor {
                 processor.process(&mono_samples, app_handle);
             }
@@ -231,4 +218,93 @@ fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>, Stri
     }
 
     Ok(output)
+}
+
+/// Save raw audio samples to a WAV file
+/// Returns the path to the saved file
+pub fn save_to_wav(
+    samples: &[f32],
+    sample_rate: u32,
+    channels: u16,
+    output_path: &PathBuf,
+) -> Result<(), String> {
+    let spec = WavSpec {
+        channels,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let mut writer = WavWriter::create(output_path, spec)
+        .map_err(|e| format!("Failed to create WAV file: {}", e))?;
+
+    for &sample in samples {
+        writer
+            .write_sample(sample)
+            .map_err(|e| format!("Failed to write sample: {}", e))?;
+    }
+
+    writer
+        .finalize()
+        .map_err(|e| format!("Failed to finalize WAV file: {}", e))?;
+
+    Ok(())
+}
+
+/// Generate a timestamped filename for recording
+pub fn generate_recording_filename() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let secs = now.as_secs();
+
+    // Convert to date/time components (UTC)
+    let days_since_epoch = secs / 86400;
+    let time_of_day = secs % 86400;
+
+    // Simple date calculation (works for 1970-2099)
+    let mut year = 1970;
+    let mut remaining_days = days_since_epoch;
+
+    loop {
+        let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_months: [u64; 12] = if is_leap {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 0;
+    for (i, &days) in days_in_months.iter().enumerate() {
+        if remaining_days < days {
+            month = i + 1;
+            break;
+        }
+        remaining_days -= days;
+    }
+    let day = remaining_days + 1;
+
+    let hour = time_of_day / 3600;
+    let minute = (time_of_day % 3600) / 60;
+    let second = time_of_day % 60;
+
+    format!(
+        "flowstt-{:04}{:02}{:02}-{:02}{:02}{:02}.wav",
+        year, month, day, hour, minute, second
+    )
 }

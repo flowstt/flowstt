@@ -3,9 +3,10 @@ mod pipewire_audio;
 mod processor;
 mod transcribe;
 
-use audio::{AudioDevice, AudioSourceType, RecordingState};
+use audio::{AudioDevice, AudioSourceType, RecordingState, generate_recording_filename, save_to_wav};
 use pipewire_audio::{PipeWireBackend, PwAudioDevice};
 use std::env;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter, State};
@@ -34,6 +35,8 @@ struct AppState {
     pipewire: Arc<Mutex<Option<PipeWireBackend>>>,
     /// Flag to signal the audio processing thread to stop
     processing_active: Arc<Mutex<bool>>,
+    /// Flag to enable/disable echo cancellation in the mixer
+    aec_enabled: Arc<Mutex<bool>>,
 }
 
 /// Convert PipeWire device to frontend AudioDevice format
@@ -214,6 +217,32 @@ fn stop_recording(
             return Err("No audio recorded".to_string());
         }
         
+        // Save raw audio to WAV file in ~/Documents/Recordings
+        let filename = generate_recording_filename();
+        let recordings_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Documents")
+            .join("Recordings");
+        
+        // Create directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+            eprintln!("Failed to create recordings directory: {}", e);
+        }
+        
+        let output_path = recordings_dir.join(&filename);
+        
+        println!("Attempting to save {} samples to: {:?}", samples.len(), output_path);
+        
+        if let Err(e) = save_to_wav(&samples, sample_rate, channels, &output_path) {
+            eprintln!("Failed to save WAV file: {}", e);
+            // Continue with transcription even if save fails
+        } else {
+            let path_str = output_path.to_string_lossy().to_string();
+            println!("Saved recording to: {}", path_str);
+            // Emit event with saved file path
+            let _ = app_handle.emit("recording-saved", path_str);
+        }
+        
         // Create raw audio for processing
         let raw_audio = audio::RawRecordedAudio {
             samples,
@@ -367,13 +396,13 @@ fn is_monitoring(state: State<AppState>) -> bool {
 }
 
 #[tauri::command]
-fn set_processing_enabled(enabled: bool, state: State<AppState>) {
-    state.recording.set_processing_enabled(enabled);
+fn set_aec_enabled(enabled: bool, state: State<AppState>) {
+    *state.aec_enabled.lock().unwrap() = enabled;
 }
 
 #[tauri::command]
-fn is_processing_enabled(state: State<AppState>) -> bool {
-    state.recording.is_processing_enabled()
+fn is_aec_enabled(state: State<AppState>) -> bool {
+    *state.aec_enabled.lock().unwrap()
 }
 
 #[tauri::command]
@@ -410,8 +439,11 @@ struct ModelStatus {
 pub fn run() {
     configure_wayland_workarounds();
     
-    // Initialize PipeWire backend
-    let pipewire = match PipeWireBackend::new() {
+    // Create shared AEC enabled flag
+    let aec_enabled = Arc::new(Mutex::new(false));
+    
+    // Initialize PipeWire backend with shared AEC flag
+    let pipewire = match PipeWireBackend::new(Arc::clone(&aec_enabled)) {
         Ok(pw) => {
             println!("PipeWire audio backend initialized");
             Some(pw)
@@ -428,6 +460,7 @@ pub fn run() {
             transcriber: Mutex::new(Transcriber::new()),
             pipewire: Arc::new(Mutex::new(pipewire)),
             processing_active: Arc::new(Mutex::new(false)),
+            aec_enabled,
         })
         .invoke_handler(tauri::generate_handler![
             list_all_sources,
@@ -437,8 +470,8 @@ pub fn run() {
             start_monitor,
             stop_monitor,
             is_monitoring,
-            set_processing_enabled,
-            is_processing_enabled,
+            set_aec_enabled,
+            is_aec_enabled,
             transcribe,
             check_model_status,
             download_model,

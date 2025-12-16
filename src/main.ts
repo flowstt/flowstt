@@ -609,7 +609,7 @@ let source1Select: HTMLSelectElement | null;
 let source2Select: HTMLSelectElement | null;
 let recordBtn: HTMLButtonElement | null;
 let monitorToggle: HTMLInputElement | null;
-let processingToggle: HTMLInputElement | null;
+let aecToggle: HTMLInputElement | null;
 let statusEl: HTMLElement | null;
 let resultEl: HTMLElement | null;
 let modelWarning: HTMLElement | null;
@@ -623,7 +623,7 @@ let closeBtn: HTMLButtonElement | null;
 // State
 let isRecording = false;
 let isMonitoring = false;
-let isProcessingEnabled = false;
+let isAecEnabled = false;
 let wasMonitoringBeforeRecording = false;
 let allDevices: AudioDevice[] = [];
 let waveformRenderer: WaveformRenderer | null = null;
@@ -633,6 +633,7 @@ let transcriptionCompleteUnlisten: UnlistenFn | null = null;
 let transcriptionErrorUnlisten: UnlistenFn | null = null;
 let speechStartedUnlisten: UnlistenFn | null = null;
 let speechEndedUnlisten: UnlistenFn | null = null;
+let recordingSavedUnlisten: UnlistenFn | null = null;
 
 async function loadDevices() {
   try {
@@ -651,8 +652,8 @@ async function loadDevices() {
     if (monitorToggle) {
       monitorToggle.disabled = !hasDevices;
     }
-    if (processingToggle) {
-      processingToggle.disabled = !hasDevices;
+    if (aecToggle) {
+      aecToggle.disabled = !hasDevices;
     }
   } catch (error) {
     console.error("Failed to load devices:", error);
@@ -907,6 +908,39 @@ function cleanupSpeechEventListeners() {
   }
 }
 
+async function setupRecordingSavedListener() {
+  if (recordingSavedUnlisten) return;
+
+  recordingSavedUnlisten = await listen<string>("recording-saved", (event) => {
+    console.log(`[Recording] Saved to: ${event.payload}`);
+    // Show brief notification in status
+    if (statusEl) {
+      const currentStatus = statusEl.textContent || "";
+      if (!currentStatus.includes("Error")) {
+        const savedMsg = `Saved: ${event.payload}`;
+        // Briefly show saved message, then restore status
+        const prevStatus = currentStatus;
+        const prevClass = statusEl.className;
+        statusEl.textContent = savedMsg;
+        statusEl.className = "status";
+        setTimeout(() => {
+          if (statusEl && statusEl.textContent === savedMsg) {
+            statusEl.textContent = prevStatus;
+            statusEl.className = prevClass;
+          }
+        }, 3000);
+      }
+    }
+  });
+}
+
+function cleanupRecordingSavedListener() {
+  if (recordingSavedUnlisten) {
+    recordingSavedUnlisten();
+    recordingSavedUnlisten = null;
+  }
+}
+
 function cleanupTranscriptionListeners() {
   if (transcriptionCompleteUnlisten) {
     transcriptionCompleteUnlisten();
@@ -918,24 +952,18 @@ function cleanupTranscriptionListeners() {
   }
 }
 
-async function toggleProcessing() {
-  if (!processingToggle) return;
+async function toggleAec() {
+  if (!aecToggle) return;
 
-  const newState = processingToggle.checked;
+  const newState = aecToggle.checked;
   try {
-    if (newState) {
-      await setupSpeechEventListeners();
-    }
-    await invoke("set_processing_enabled", { enabled: newState });
-    isProcessingEnabled = newState;
-    console.log(`Voice processing ${isProcessingEnabled ? "enabled" : "disabled"}`);
-    if (!newState) {
-      cleanupSpeechEventListeners();
-    }
+    await invoke("set_aec_enabled", { enabled: newState });
+    isAecEnabled = newState;
+    console.log(`Echo cancellation ${isAecEnabled ? "enabled" : "disabled"}`);
   } catch (error) {
-    console.error("Toggle processing error:", error);
+    console.error("Toggle AEC error:", error);
     // Revert toggle on error
-    processingToggle.checked = !newState;
+    aecToggle.checked = !newState;
   }
 }
 
@@ -1115,7 +1143,7 @@ window.addEventListener("DOMContentLoaded", () => {
   source2Select = document.querySelector("#source2-select");
   recordBtn = document.querySelector("#record-btn");
   monitorToggle = document.querySelector("#monitor-toggle");
-  processingToggle = document.querySelector("#processing-toggle");
+  aecToggle = document.querySelector("#aec-toggle");
   statusEl = document.querySelector("#status");
   resultEl = document.querySelector("#transcription-result");
   modelWarning = document.querySelector("#model-warning");
@@ -1154,14 +1182,16 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Setup transcription listeners early
+  // Setup transcription, speech, and recording event listeners early (always on)
   setupTranscriptionListeners();
+  setupSpeechEventListeners();
+  setupRecordingSavedListener();
 
   closeBtn = document.querySelector("#close-btn");
 
   recordBtn?.addEventListener("click", toggleRecording);
   monitorToggle?.addEventListener("change", toggleMonitor);
-  processingToggle?.addEventListener("change", toggleProcessing);
+  aecToggle?.addEventListener("change", toggleAec);
   downloadModelBtn?.addEventListener("click", downloadModel);
   source1Select?.addEventListener("change", onSourceChange);
   source2Select?.addEventListener("change", onSourceChange);
@@ -1177,6 +1207,7 @@ window.addEventListener("DOMContentLoaded", () => {
     cleanupVisualizationListener();
     cleanupTranscriptionListeners();
     cleanupSpeechEventListeners();
+    cleanupRecordingSavedListener();
   });
 
   loadDevices();

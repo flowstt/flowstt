@@ -86,7 +86,7 @@ The system SHALL capture audio from system audio sources (monitor devices) for m
 - **THEN** the audio is resampled to 16kHz before transcription
 
 ### Requirement: Mixed Audio Capture
-The system SHALL support capturing audio from both an input device and system audio simultaneously, combining them into a single stream.
+The system SHALL support capturing audio from both an input device and system audio simultaneously, combining them into a single stream. When both sources are active, acoustic echo cancellation SHALL be applied to the microphone input to remove system audio that is picked up acoustically before mixing.
 
 #### Scenario: Mixed mode start
 - **WHEN** user starts monitoring or recording in mixed mode
@@ -103,4 +103,12 @@ The system SHALL support capturing audio from both an input device and system au
 #### Scenario: Mixed mode transcription
 - **WHEN** recording completes in mixed mode
 - **THEN** the combined audio is transcribed, capturing speech from both microphone and system audio
+
+#### Scenario: Echo cancellation applied in mixed mode
+- **WHEN** capturing in mixed mode with both microphone and system audio active
+- **THEN** acoustic echo cancellation is applied to the microphone signal using system audio as the reference before mixing, removing speaker feedback from the microphone input
+
+#### Scenario: Echo cancellation improves transcription
+- **WHEN** system audio is playing while user speaks into microphone in mixed mode
+- **THEN** the user's speech is clearly captured without duplication of the system audio content
 

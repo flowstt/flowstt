@@ -15,6 +15,7 @@ Traditional voice assistants feel robotic. FlowSTT treats conversation as a cont
 ## Current Features
 
 - **Audio Capture**: Microphone, system audio (loopback), or mixed mode
+- **Echo Cancellation**: WebRTC AEC3-based echo removal for mixed mode capture
 - **Real-time Visualization**: Live waveform and spectrogram displays
 - **Speech Detection**: Multi-feature analysis (amplitude, ZCR, spectral centroid) with voiced/whisper modes
 - **Local Transcription**: Offline Whisper inference via whisper-rs
@@ -34,6 +35,7 @@ Traditional voice assistants feel robotic. FlowSTT treats conversation as a cont
 - [x] Backend visualization processing (unified event pipeline)
 - [x] System audio capture (PipeWire/PulseAudio monitor sources)
 - [x] Mixed audio capture (mic + system combined)
+- [x] Echo cancellation (WebRTC AEC3 for mixed mode)
 - [ ] Real-time cadence analysis (natural pause vs end-of-thought detection)
 - [ ] Adaptive timeout management (context-aware listening windows)
 - [ ] Acknowledgment feedback loop (accept tone, processing indicator)
@@ -68,5 +70,5 @@ pnpm tauri build    # production
 
 - **Frontend**: TypeScript, Vite
 - **Backend**: Rust, Tauri 2.0
-- **Audio**: cpal (cross-platform), rustfft (spectral analysis)
+- **Audio**: PipeWire (Linux), rustfft (spectral analysis), aec3 (echo cancellation)
 - **Transcription**: whisper-rs (whisper.cpp bindings)
