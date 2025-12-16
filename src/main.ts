@@ -5,7 +5,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 interface AudioDevice {
   id: string;
   name: string;
-  source_type: "Input" | "System" | "Mixed";
 }
 
 interface ModelStatus {
@@ -882,17 +881,7 @@ async function setupTranscriptionListeners() {
   });
 }
 
-// Cleanup function for transcription listeners (called on app cleanup if needed)
-export function cleanupTranscriptionListeners() {
-  if (transcriptionCompleteUnlisten) {
-    transcriptionCompleteUnlisten();
-    transcriptionCompleteUnlisten = null;
-  }
-  if (transcriptionErrorUnlisten) {
-    transcriptionErrorUnlisten();
-    transcriptionErrorUnlisten = null;
-  }
-}
+
 
 async function setupSpeechEventListeners() {
   if (speechStartedUnlisten) return;
@@ -915,6 +904,17 @@ function cleanupSpeechEventListeners() {
   if (speechEndedUnlisten) {
     speechEndedUnlisten();
     speechEndedUnlisten = null;
+  }
+}
+
+function cleanupTranscriptionListeners() {
+  if (transcriptionCompleteUnlisten) {
+    transcriptionCompleteUnlisten();
+    transcriptionCompleteUnlisten = null;
+  }
+  if (transcriptionErrorUnlisten) {
+    transcriptionErrorUnlisten();
+    transcriptionErrorUnlisten = null;
   }
 }
 
@@ -1170,6 +1170,13 @@ window.addEventListener("DOMContentLoaded", () => {
     e.stopPropagation();
     const window = getCurrentWindow();
     await window.destroy();
+  });
+
+  // Cleanup listeners on app close
+  window.addEventListener("beforeunload", () => {
+    cleanupVisualizationListener();
+    cleanupTranscriptionListeners();
+    cleanupSpeechEventListeners();
   });
 
   loadDevices();

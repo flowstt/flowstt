@@ -13,20 +13,17 @@ default-run = "flowstt"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "flowstt_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-cpal = "0.15"
 pipewire = "0.8"
 whisper-rs = "0.14"
-rubato = "0.16"
 dirs = "5"
 reqwest = { version = "0.12", features = ["blocking"] }
 rustfft = "6.2"

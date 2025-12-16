@@ -10,84 +10,6 @@ pub trait AudioProcessor: Send {
     /// Samples are mono f32 values, typically in the range [-1.0, 1.0].
     /// The AppHandle can be used to emit events to the frontend.
     fn process(&mut self, samples: &[f32], app_handle: &AppHandle);
-
-    /// Return the processor's name for identification.
-    fn name(&self) -> &str;
-}
-
-/// Silence detector that logs state transitions to console.
-/// Uses RMS (root mean square) amplitude with a configurable dB threshold.
-pub struct SilenceDetector {
-    /// Threshold in dB below which audio is considered silent (default: -40.0)
-    threshold_db: f32,
-    /// Current silence state
-    is_silent: bool,
-    /// Whether we've logged the initial state
-    initialized: bool,
-}
-
-impl SilenceDetector {
-    /// Create a new silence detector with default threshold (-40 dB)
-    pub fn new() -> Self {
-        Self {
-            threshold_db: -40.0,
-            is_silent: true,
-            initialized: false,
-        }
-    }
-
-    /// Calculate RMS amplitude of samples
-    fn calculate_rms(samples: &[f32]) -> f32 {
-        if samples.is_empty() {
-            return 0.0;
-        }
-        let sum_squares: f32 = samples.iter().map(|s| s * s).sum();
-        (sum_squares / samples.len() as f32).sqrt()
-    }
-
-    /// Convert linear amplitude to decibels
-    fn amplitude_to_db(amplitude: f32) -> f32 {
-        if amplitude <= 0.0 {
-            return f32::NEG_INFINITY;
-        }
-        20.0 * amplitude.log10()
-    }
-}
-
-impl Default for SilenceDetector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AudioProcessor for SilenceDetector {
-    fn process(&mut self, samples: &[f32], _app_handle: &AppHandle) {
-        let rms = Self::calculate_rms(samples);
-        let db = Self::amplitude_to_db(rms);
-        let now_silent = db < self.threshold_db;
-
-        // Only log on state transitions (or first detection)
-        if !self.initialized {
-            self.initialized = true;
-            self.is_silent = now_silent;
-            if now_silent {
-                println!("[SilenceDetector] Silence detected (initial state)");
-            } else {
-                println!("[SilenceDetector] Sound detected (initial state)");
-            }
-        } else if now_silent != self.is_silent {
-            self.is_silent = now_silent;
-            if now_silent {
-                println!("[SilenceDetector] Silence detected");
-            } else {
-                println!("[SilenceDetector] Sound detected");
-            }
-        }
-    }
-
-    fn name(&self) -> &str {
-        "SilenceDetector"
-    }
 }
 
 /// Event payload for speech detection events
@@ -196,21 +118,6 @@ impl SpeechDetector {
             speech_sample_count: 0,
             initialized: false,
         }
-    }
-
-    /// Create a new speech detector with custom configuration.
-    /// 
-    /// # Arguments
-    /// * `sample_rate` - Audio sample rate in Hz
-    /// * `voiced_threshold_db` - Threshold for voiced speech detection
-    /// * `whisper_threshold_db` - Threshold for whisper speech detection (should be lower)
-    /// * `hold_time_ms` - Time in milliseconds to wait before emitting speech-ended
-    pub fn with_config(sample_rate: u32, voiced_threshold_db: f32, whisper_threshold_db: f32, hold_time_ms: u32) -> Self {
-        let mut detector = Self::with_defaults(sample_rate);
-        detector.voiced_config.threshold_db = voiced_threshold_db;
-        detector.whisper_config.threshold_db = whisper_threshold_db;
-        detector.hold_samples = (sample_rate as u64 * hold_time_ms as u64 / 1000) as u32;
-        detector
     }
 
     /// Calculate RMS amplitude of samples
@@ -412,7 +319,6 @@ impl AudioProcessor for SpeechDetector {
                         self.reset_onset_state();
                         let _ = app_handle.emit("speech-started", SpeechEventPayload { duration_ms: None });
                         println!("[SpeechDetector] Speech started (whisper mode)");
-                        return;
                     }
                 }
             }
@@ -439,9 +345,6 @@ impl AudioProcessor for SpeechDetector {
         }
     }
 
-    fn name(&self) -> &str {
-        "SpeechDetector"
-    }
 }
 
 // ============================================================================
@@ -542,7 +445,7 @@ impl VisualizationProcessor {
     /// Build the color lookup table matching the frontend gradient
     /// Gradient: dark blue -> blue -> cyan -> yellow-green -> orange -> red
     fn build_color_lut() -> Vec<[u8; 3]> {
-        let stops = vec![
+        let stops = [
             ColorStop { position: 0.00, r: 10, g: 15, b: 26 },    // Background #0a0f1a
             ColorStop { position: 0.15, r: 0, g: 50, b: 200 },    // Blue
             ColorStop { position: 0.35, r: 0, g: 255, b: 150 },   // Cyan
@@ -627,6 +530,7 @@ impl VisualizationProcessor {
         let start_bin = bin_low.floor() as usize;
         let end_bin = bin_high.ceil() as usize;
         
+        #[allow(clippy::needless_range_loop)]
         for b in start_bin..=end_bin.min(num_bins - 1) {
             let bin_start = b as f32;
             let bin_end = (b + 1) as f32;
@@ -699,7 +603,7 @@ impl VisualizationProcessor {
         
         // Calculate window size to achieve target output samples
         let window_size = (samples.len() / self.waveform_target_samples).max(1);
-        let output_count = (samples.len() + window_size - 1) / window_size;
+        let output_count = samples.len().div_ceil(window_size);
         
         let mut output = Vec::with_capacity(output_count);
         
@@ -754,9 +658,5 @@ impl AudioProcessor for VisualizationProcessor {
         };
         
         let _ = app_handle.emit("visualization-data", payload);
-    }
-    
-    fn name(&self) -> &str {
-        "VisualizationProcessor"
     }
 }

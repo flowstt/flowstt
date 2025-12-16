@@ -49,8 +49,6 @@ enum PwCommand {
     },
     /// Stop all capture
     StopCapture,
-    /// Shutdown the PipeWire thread
-    Shutdown,
 }
 
 /// Audio samples received from PipeWire (already mixed if multiple sources)
@@ -154,10 +152,6 @@ impl PipeWireBackend {
         self.audio_rx.try_recv().ok()
     }
 
-    /// Shutdown the backend
-    pub fn shutdown(&self) {
-        let _ = self.cmd_tx.send(PwCommand::Shutdown);
-    }
 }
 
 /// Mixer state for combining audio from multiple streams
@@ -255,8 +249,6 @@ struct ActiveStream {
 
 /// Internal state for the PipeWire thread
 struct PwThreadState {
-    /// Audio mixer for combining streams
-    mixer: Rc<RefCell<AudioMixer>>,
     /// Active streams (kept alive)
     streams: Vec<ActiveStream>,
     /// Sample rate (updated from param_changed)
@@ -353,7 +345,6 @@ fn run_pipewire_thread(
 
     // Thread state - share system_map to know which IDs are sinks
     let state = Rc::new(RefCell::new(PwThreadState {
-        mixer: Rc::clone(&mixer),
         streams: Vec::new(),
         sample_rate: Arc::clone(&sample_rate),
         sink_ids: Rc::new(RefCell::new(std::collections::HashSet::new())),
@@ -364,7 +355,6 @@ fn run_pipewire_thread(
     let system_map_for_sync = Rc::clone(&system_map);
 
     // Setup command receiver using a timer that polls the channel
-    let mainloop_weak = mainloop.downgrade();
     let core_ref = Rc::new(core);
     let core_for_timer = Rc::clone(&core_ref);
     let state_for_timer = Rc::clone(&state);
@@ -440,11 +430,6 @@ fn run_pipewire_thread(
                     PwCommand::StopCapture => {
                         state_for_timer.borrow_mut().streams.clear();
                         mixer_for_timer.borrow_mut().set_num_streams(0);
-                    }
-                    PwCommand::Shutdown => {
-                        if let Some(mainloop) = mainloop_weak.upgrade() {
-                            mainloop.quit();
-                        }
                     }
                 }
             }
@@ -522,8 +507,6 @@ fn create_capture_stream(
     let format_info_for_param = Rc::clone(&format_info);
     let sample_rate_for_param = Arc::clone(&sample_rate);
     let mixer_for_param = Rc::clone(&mixer);
-    
-    let format_info_for_process = Rc::clone(&format_info);
     let mixer_for_process = mixer;
 
     let listener = stream

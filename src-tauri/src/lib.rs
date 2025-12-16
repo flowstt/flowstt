@@ -21,7 +21,10 @@ fn configure_wayland_workarounds() {
 
     if is_wayland {
         // WebKitGTK has compositing issues on Wayland
-        env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        // SAFETY: This is called before any threads are spawned
+        unsafe {
+            env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
     }
 }
 
@@ -32,10 +35,6 @@ struct AppState {
     /// Flag to signal the audio processing thread to stop
     processing_active: Arc<Mutex<bool>>,
 }
-
-// Implement Send + Sync for AppState since all fields use Arc<Mutex<_>>
-unsafe impl Send for AppState {}
-unsafe impl Sync for AppState {}
 
 /// Convert PipeWire device to frontend AudioDevice format
 fn pw_device_to_audio_device(pw_dev: &PwAudioDevice) -> AudioDevice {
@@ -65,8 +64,7 @@ fn list_all_sources(state: State<AppState>) -> Result<Vec<AudioDevice>, String> 
         
         Ok(devices)
     } else {
-        // Fallback to cpal if PipeWire not available
-        audio::list_devices()
+        Err("PipeWire not available".to_string())
     }
 }
 
@@ -412,20 +410,19 @@ struct ModelStatus {
 pub fn run() {
     configure_wayland_workarounds();
     
-    // Try to initialize PipeWire backend
+    // Initialize PipeWire backend
     let pipewire = match PipeWireBackend::new() {
         Ok(pw) => {
             println!("PipeWire audio backend initialized");
             Some(pw)
         }
         Err(e) => {
-            eprintln!("Failed to initialize PipeWire, falling back to cpal: {}", e);
+            eprintln!("Failed to initialize PipeWire: {}", e);
             None
         }
     };
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             recording: RecordingState::new(),
             transcriber: Mutex::new(Transcriber::new()),

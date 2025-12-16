@@ -29,7 +29,7 @@ fn make_monitor_display_name(name: &str) -> String {
         
         let parts: Vec<&str> = stripped.split('.').collect();
         if let Some(last_part) = parts.last() {
-            return last_part.replace('-', " ").replace('_', " ");
+            return last_part.replace(['-', '_'], " ");
         }
     }
     name.to_string()
