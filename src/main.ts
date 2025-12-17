@@ -14,6 +14,8 @@ interface ModelStatus {
 
 interface SpeechEventPayload {
   duration_ms: number | null;
+  lookback_samples: number[] | null;
+  lookback_offset_ms: number | null;
 }
 
 // Visualization data from backend (pre-computed)
@@ -30,6 +32,8 @@ interface SpeechMetrics {
   is_voiced_pending: boolean; // Whether voiced speech onset is pending
   is_whisper_pending: boolean; // Whether whisper speech onset is pending
   is_transient: boolean;     // Whether current frame is classified as transient
+  is_lookback_speech: boolean; // Whether this is lookback-determined speech
+  lookback_offset_ms: number | null; // Lookback offset when speech just confirmed
 }
 
 interface VisualizationPayload {
@@ -625,7 +629,20 @@ class SpectrogramRenderer {
   }
 }
 
+// Buffered metric entry for delay buffer
+interface BufferedMetric {
+  amplitude: number;
+  zcr: number;
+  centroid: number;
+  speaking: boolean;
+  voicedPending: boolean;
+  whisperPending: boolean;
+  transient: boolean;
+  isLookbackSpeech: boolean;
+}
+
 // Speech Activity renderer - visualizes speech detection algorithm components
+// Includes a 200ms delay buffer to allow lookback results to be displayed correctly
 class SpeechActivityRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -637,6 +654,7 @@ class SpeechActivityRenderer {
   private zcrBuffer: Float32Array;
   private centroidBuffer: Float32Array;
   private speakingBuffer: Uint8Array;  // 0 or 1
+  private lookbackSpeechBuffer: Uint8Array; // 0 or 1 - lookback-determined speech
   private voicedPendingBuffer: Uint8Array;
   private whisperPendingBuffer: Uint8Array;
   private transientBuffer: Uint8Array;
@@ -644,6 +662,11 @@ class SpeechActivityRenderer {
   private bufferSize: number;
   private writeIndex: number = 0;
   private filled: boolean = false;
+  
+  // Delay buffer for retroactive lookback insertion
+  // At ~10ms per metric emit, 20 entries ≈ 200ms delay
+  private readonly delayBufferSize = 20;
+  private delayBuffer: BufferedMetric[] = [];
   
   // Layout constants
   private readonly leftMargin = 40;
@@ -675,6 +698,7 @@ class SpeechActivityRenderer {
     this.zcrBuffer = new Float32Array(bufferSize);
     this.centroidBuffer = new Float32Array(bufferSize);
     this.speakingBuffer = new Uint8Array(bufferSize);
+    this.lookbackSpeechBuffer = new Uint8Array(bufferSize);
     this.voicedPendingBuffer = new Uint8Array(bufferSize);
     this.whisperPendingBuffer = new Uint8Array(bufferSize);
     this.transientBuffer = new Uint8Array(bufferSize);
@@ -702,14 +726,56 @@ class SpeechActivityRenderer {
     // Normalize centroid
     const normalizedCentroid = Math.min(1, metrics.centroid_hz / this.maxCentroid);
     
-    // Store in ring buffers
-    this.amplitudeBuffer[this.writeIndex] = normalizedAmplitude;
-    this.zcrBuffer[this.writeIndex] = normalizedZcr;
-    this.centroidBuffer[this.writeIndex] = normalizedCentroid;
-    this.speakingBuffer[this.writeIndex] = metrics.is_speaking ? 1 : 0;
-    this.voicedPendingBuffer[this.writeIndex] = metrics.is_voiced_pending ? 1 : 0;
-    this.whisperPendingBuffer[this.writeIndex] = metrics.is_whisper_pending ? 1 : 0;
-    this.transientBuffer[this.writeIndex] = metrics.is_transient ? 1 : 0;
+    // Create buffered metric
+    const bufferedMetric: BufferedMetric = {
+      amplitude: normalizedAmplitude,
+      zcr: normalizedZcr,
+      centroid: normalizedCentroid,
+      speaking: metrics.is_speaking,
+      voicedPending: metrics.is_voiced_pending,
+      whisperPending: metrics.is_whisper_pending,
+      transient: metrics.is_transient,
+      isLookbackSpeech: false,
+    };
+    
+    // Add to delay buffer
+    this.delayBuffer.push(bufferedMetric);
+    
+    // If we have a lookback offset, mark previous entries as lookback speech
+    if (metrics.lookback_offset_ms !== null && metrics.lookback_offset_ms > 0) {
+      // Calculate how many entries back to mark
+      // Each entry is ~10ms, so offset_ms / 10 = number of entries
+      const entriesToMark = Math.min(
+        Math.ceil(metrics.lookback_offset_ms / 10),
+        this.delayBuffer.length - 1 // Don't mark current entry
+      );
+      
+      // Mark previous entries as lookback speech
+      for (let i = 0; i < entriesToMark; i++) {
+        const idx = this.delayBuffer.length - 2 - i;
+        if (idx >= 0) {
+          this.delayBuffer[idx].isLookbackSpeech = true;
+          this.delayBuffer[idx].speaking = true; // Also mark as speaking
+        }
+      }
+    }
+    
+    // If delay buffer is full, transfer oldest entry to ring buffers
+    if (this.delayBuffer.length > this.delayBufferSize) {
+      const oldest = this.delayBuffer.shift()!;
+      this.transferToRingBuffer(oldest);
+    }
+  }
+  
+  private transferToRingBuffer(metric: BufferedMetric): void {
+    this.amplitudeBuffer[this.writeIndex] = metric.amplitude;
+    this.zcrBuffer[this.writeIndex] = metric.zcr;
+    this.centroidBuffer[this.writeIndex] = metric.centroid;
+    this.speakingBuffer[this.writeIndex] = metric.speaking ? 1 : 0;
+    this.lookbackSpeechBuffer[this.writeIndex] = metric.isLookbackSpeech ? 1 : 0;
+    this.voicedPendingBuffer[this.writeIndex] = metric.voicedPending ? 1 : 0;
+    this.whisperPendingBuffer[this.writeIndex] = metric.whisperPending ? 1 : 0;
+    this.transientBuffer[this.writeIndex] = metric.transient ? 1 : 0;
     
     this.writeIndex = (this.writeIndex + 1) % this.bufferSize;
     if (this.writeIndex === 0) {
@@ -740,9 +806,11 @@ class SpeechActivityRenderer {
     this.zcrBuffer.fill(0);
     this.centroidBuffer.fill(0);
     this.speakingBuffer.fill(0);
+    this.lookbackSpeechBuffer.fill(0);
     this.voicedPendingBuffer.fill(0);
     this.whisperPendingBuffer.fill(0);
     this.transientBuffer.fill(0);
+    this.delayBuffer = [];
     this.writeIndex = 0;
     this.filled = false;
     this.drawIdle();
@@ -800,6 +868,7 @@ class SpeechActivityRenderer {
     const zcrs = this.getSamplesInOrder(this.zcrBuffer);
     const centroids = this.getSamplesInOrder(this.centroidBuffer);
     const speaking = this.getSamplesInOrder(this.speakingBuffer);
+    const lookbackSpeech = this.getSamplesInOrder(this.lookbackSpeechBuffer);
     const voicedPending = this.getSamplesInOrder(this.voicedPendingBuffer);
     const whisperPending = this.getSamplesInOrder(this.whisperPendingBuffer);
     const transients = this.getSamplesInOrder(this.transientBuffer);
@@ -808,7 +877,8 @@ class SpeechActivityRenderer {
     if (sampleCount === 0) return;
 
     // Draw speech state bar (semi-transparent, at top)
-    this.drawSpeechBar(speaking, area);
+    // Now includes lookback speech in a different color
+    this.drawSpeechBar(speaking, lookbackSpeech, area);
 
     // Draw metric lines
     // Amplitude (gold/yellow)
@@ -828,30 +898,49 @@ class SpeechActivityRenderer {
 
   private drawSpeechBar(
     speaking: Uint8Array,
+    lookbackSpeech: Uint8Array,
     area: { x: number; y: number; width: number; height: number }
   ): void {
     if (speaking.length === 0) return;
 
-    this.ctx.fillStyle = "rgba(34, 197, 94, 0.5)"; // Semi-transparent green
-
-    // Draw filled rectangles where speaking is true
-    // Position relative to full buffer - data appears on right side
-    let inSpeech = false;
-    let speechStartX = 0;
+    const barHeight = area.height * 0.15; // 15% of graph height
     const offset = this.bufferSize - speaking.length;
 
-    for (let i = 0; i <= speaking.length; i++) {
-      const isSpeaking = i < speaking.length && speaking[i] === 1;
+    // First pass: draw lookback speech regions (bright blue color)
+    this.ctx.fillStyle = "rgba(59, 130, 246, 0.7)"; // Bright blue for lookback
+    let inLookback = false;
+    let lookbackStartX = 0;
+
+    for (let i = 0; i <= lookbackSpeech.length; i++) {
+      const isLookback = i < lookbackSpeech.length && lookbackSpeech[i] === 1;
       const x = area.x + ((offset + i) / this.bufferSize) * area.width;
 
-      if (isSpeaking && !inSpeech) {
-        // Start of speech region
+      if (isLookback && !inLookback) {
+        inLookback = true;
+        lookbackStartX = x;
+      } else if (!isLookback && inLookback) {
+        inLookback = false;
+        this.ctx.fillRect(lookbackStartX, area.y, x - lookbackStartX, barHeight);
+      }
+    }
+
+    // Second pass: draw confirmed speech regions (green color, on top of lookback)
+    this.ctx.fillStyle = "rgba(34, 197, 94, 0.5)"; // Semi-transparent green for confirmed
+    let inSpeech = false;
+    let speechStartX = 0;
+
+    for (let i = 0; i <= speaking.length; i++) {
+      // Only draw confirmed speech where it's NOT lookback speech
+      const isSpeaking = i < speaking.length && speaking[i] === 1;
+      const isLookbackHere = i < lookbackSpeech.length && lookbackSpeech[i] === 1;
+      const isConfirmedSpeech = isSpeaking && !isLookbackHere;
+      const x = area.x + ((offset + i) / this.bufferSize) * area.width;
+
+      if (isConfirmedSpeech && !inSpeech) {
         inSpeech = true;
         speechStartX = x;
-      } else if (!isSpeaking && inSpeech) {
-        // End of speech region
+      } else if (!isConfirmedSpeech && inSpeech) {
         inSpeech = false;
-        const barHeight = area.height * 0.15; // 15% of graph height
         this.ctx.fillRect(speechStartX, area.y, x - speechStartX, barHeight);
       }
     }

@@ -17,6 +17,10 @@ pub trait AudioProcessor: Send {
 pub struct SpeechEventPayload {
     /// Duration in milliseconds (for speech-ended: how long the speech lasted)
     pub duration_ms: Option<u64>,
+    /// Lookback audio samples from true speech start (for speech-started only)
+    pub lookback_samples: Option<Vec<f32>>,
+    /// Lookback offset in milliseconds (how far back the true start was found)
+    pub lookback_offset_ms: Option<u32>,
 }
 
 /// Speech detection metrics for visualization
@@ -36,6 +40,10 @@ pub struct SpeechMetrics {
     pub is_whisper_pending: bool,
     /// Whether current frame is classified as transient
     pub is_transient: bool,
+    /// Whether this is lookback-determined speech (retroactively identified)
+    pub is_lookback_speech: bool,
+    /// Lookback offset in milliseconds (when speech was just confirmed)
+    pub lookback_offset_ms: Option<u32>,
 }
 
 /// Configuration for a speech detection mode (voiced or whisper)
@@ -63,6 +71,9 @@ struct SpeechModeConfig {
 /// - **Whisper mode**: For soft/breathy speech (higher ZCR, broader centroid range)
 /// 
 /// Explicit transient rejection filters keyboard clicks and similar impulsive sounds.
+/// 
+/// Includes lookback functionality to capture the true start of speech by maintaining
+/// a ring buffer of recent audio samples and analyzing them retroactively.
 pub struct SpeechDetector {
     /// Sample rate for time/frequency calculations
     sample_rate: u32,
@@ -106,6 +117,20 @@ pub struct SpeechDetector {
     last_centroid_hz: f32,
     /// Whether last frame was classified as transient (for metrics)
     last_is_transient: bool,
+    
+    // Lookback ring buffer fields
+    /// Ring buffer for recent audio samples (for lookback analysis)
+    lookback_buffer: Vec<f32>,
+    /// Current write position in the ring buffer
+    lookback_write_index: usize,
+    /// Capacity of the lookback buffer in samples
+    lookback_capacity: usize,
+    /// Whether the lookback buffer has been filled at least once
+    lookback_filled: bool,
+    /// Lookback threshold in dB (more sensitive than detection threshold)
+    lookback_threshold_db: f32,
+    /// Last lookback offset in milliseconds (for metrics, set when speech confirmed)
+    last_lookback_offset_ms: Option<u32>,
 }
 
 impl SpeechDetector {
@@ -123,8 +148,12 @@ impl SpeechDetector {
     /// - Transient rejection: ZCR > 0.45 AND centroid > 6500Hz
     /// - Hold time: 300ms
     /// - Onset grace period: 30ms (brief dips in features don't reset onset counters)
+    /// - Lookback buffer: 200ms (covers max onset time + margin)
+    /// - Lookback threshold: -55dB (more sensitive to catch speech starts)
     pub fn with_defaults(sample_rate: u32) -> Self {
         let hold_samples = (sample_rate as u64 * 300 / 1000) as u32;
+        // 200ms lookback buffer
+        let lookback_capacity = (sample_rate as u64 * 200 / 1000) as usize;
         
         Self {
             sample_rate,
@@ -158,6 +187,13 @@ impl SpeechDetector {
             last_zcr: 0.0,
             last_centroid_hz: 0.0,
             last_is_transient: false,
+            // Lookback buffer initialization
+            lookback_buffer: vec![0.0; lookback_capacity],
+            lookback_write_index: 0,
+            lookback_capacity,
+            lookback_filled: false,
+            lookback_threshold_db: -55.0, // More sensitive than detection thresholds
+            last_lookback_offset_ms: None,
         }
     }
 
@@ -287,6 +323,85 @@ impl SpeechDetector {
         self.whisper_grace_count = 0;
     }
 
+    /// Add samples to the lookback ring buffer
+    fn push_to_lookback_buffer(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            self.lookback_buffer[self.lookback_write_index] = sample;
+            self.lookback_write_index = (self.lookback_write_index + 1) % self.lookback_capacity;
+            if self.lookback_write_index == 0 {
+                self.lookback_filled = true;
+            }
+        }
+    }
+
+    /// Get the contents of the lookback buffer in chronological order (oldest to newest)
+    fn get_lookback_buffer_contents(&self) -> Vec<f32> {
+        if !self.lookback_filled {
+            // Buffer hasn't wrapped yet, return from start to write index
+            return self.lookback_buffer[..self.lookback_write_index].to_vec();
+        }
+        // Buffer has wrapped, return in chronological order
+        let mut result = Vec::with_capacity(self.lookback_capacity);
+        // Second part (older samples): from write_index to end
+        result.extend_from_slice(&self.lookback_buffer[self.lookback_write_index..]);
+        // First part (newer samples): from start to write_index
+        result.extend_from_slice(&self.lookback_buffer[..self.lookback_write_index]);
+        result
+    }
+
+    /// Find the true start of speech by scanning backward through the lookback buffer.
+    /// Returns (lookback_samples, lookback_offset_ms) where:
+    /// - lookback_samples: Audio from the true start to current position
+    /// - lookback_offset_ms: How far back the true start was found
+    fn find_lookback_start(&self) -> (Vec<f32>, u32) {
+        let buffer = self.get_lookback_buffer_contents();
+        if buffer.is_empty() {
+            return (Vec::new(), 0);
+        }
+
+        // Scan backward from the end to find where amplitude first exceeded threshold
+        // Use small chunks for finer resolution (128 samples ≈ 2.7ms at 48kHz)
+        const CHUNK_SIZE: usize = 128;
+        // Add margin before detected start to catch the very beginning (20ms)
+        let margin_samples = (self.sample_rate as usize * 20) / 1000;
+        let threshold_linear = 10.0f32.powf(self.lookback_threshold_db / 20.0);
+        
+        let mut first_above_threshold_idx = buffer.len(); // Default to end if nothing found
+        
+        // Scan from end to beginning in chunks
+        let mut pos = buffer.len();
+        while pos > 0 {
+            let chunk_start = pos.saturating_sub(CHUNK_SIZE);
+            let chunk = &buffer[chunk_start..pos];
+            
+            // Use peak amplitude instead of RMS for more sensitivity to transients
+            let peak = chunk.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            
+            if peak >= threshold_linear {
+                // This chunk has audio above threshold
+                // Continue scanning to find where it started
+                first_above_threshold_idx = chunk_start;
+            } else if first_above_threshold_idx < buffer.len() {
+                // We found a quiet region after finding speech, stop here
+                break;
+            }
+            
+            pos = chunk_start;
+        }
+        
+        // Apply margin: go back further to catch the very beginning
+        let start_with_margin = first_above_threshold_idx.saturating_sub(margin_samples);
+        
+        // Extract samples from the found start point (with margin) to the end
+        let lookback_samples = buffer[start_with_margin..].to_vec();
+        
+        // Calculate offset in milliseconds
+        let samples_before = buffer.len() - start_with_margin;
+        let offset_ms = (samples_before as u64 * 1000 / self.sample_rate as u64) as u32;
+        
+        (lookback_samples, offset_ms)
+    }
+
     /// Get the current speech detection metrics.
     /// Call this after process() to get the latest computed values.
     pub fn get_metrics(&self) -> SpeechMetrics {
@@ -298,12 +413,17 @@ impl SpeechDetector {
             is_voiced_pending: self.is_pending_voiced,
             is_whisper_pending: self.is_pending_whisper,
             is_transient: self.last_is_transient,
+            is_lookback_speech: false, // Will be set by visualization layer based on delay buffer
+            lookback_offset_ms: self.last_lookback_offset_ms,
         }
     }
 }
 
 impl AudioProcessor for SpeechDetector {
     fn process(&mut self, samples: &[f32], app_handle: &AppHandle) {
+        // Step 0: Add samples to lookback buffer (always, for retroactive analysis)
+        self.push_to_lookback_buffer(samples);
+        
         // Step 1: Calculate all features
         let rms = Self::calculate_rms(samples);
         let db = Self::amplitude_to_db(rms);
@@ -315,6 +435,8 @@ impl AudioProcessor for SpeechDetector {
         self.last_zcr = zcr;
         self.last_centroid_hz = centroid;
         self.last_is_transient = self.is_transient(zcr, centroid);
+        // Clear lookback offset by default (only set when speech is confirmed)
+        self.last_lookback_offset_ms = None;
 
         if !self.initialized {
             self.initialized = true;
@@ -364,8 +486,17 @@ impl AudioProcessor for SpeechDetector {
                         self.is_speaking = true;
                         self.speech_sample_count = self.voiced_onset_count as u64;
                         self.reset_onset_state();
-                        let _ = app_handle.emit("speech-started", SpeechEventPayload { duration_ms: None });
-                        println!("[SpeechDetector] Speech started (voiced mode)");
+                        
+                        // Perform lookback analysis to find true speech start
+                        let (lookback_samples, lookback_offset_ms) = self.find_lookback_start();
+                        self.last_lookback_offset_ms = Some(lookback_offset_ms);
+                        
+                        let _ = app_handle.emit("speech-started", SpeechEventPayload { 
+                            duration_ms: None,
+                            lookback_samples: Some(lookback_samples),
+                            lookback_offset_ms: Some(lookback_offset_ms),
+                        });
+                        println!("[SpeechDetector] Speech started (voiced mode, lookback: {}ms)", lookback_offset_ms);
                         return;
                     }
                 }
@@ -385,8 +516,17 @@ impl AudioProcessor for SpeechDetector {
                         self.is_speaking = true;
                         self.speech_sample_count = self.whisper_onset_count as u64;
                         self.reset_onset_state();
-                        let _ = app_handle.emit("speech-started", SpeechEventPayload { duration_ms: None });
-                        println!("[SpeechDetector] Speech started (whisper mode)");
+                        
+                        // Perform lookback analysis to find true speech start
+                        let (lookback_samples, lookback_offset_ms) = self.find_lookback_start();
+                        self.last_lookback_offset_ms = Some(lookback_offset_ms);
+                        
+                        let _ = app_handle.emit("speech-started", SpeechEventPayload { 
+                            duration_ms: None,
+                            lookback_samples: Some(lookback_samples),
+                            lookback_offset_ms: Some(lookback_offset_ms),
+                        });
+                        println!("[SpeechDetector] Speech started (whisper mode, lookback: {}ms)", lookback_offset_ms);
                     }
                 }
             }
@@ -421,7 +561,11 @@ impl AudioProcessor for SpeechDetector {
                     let duration_ms = self.samples_to_ms(self.speech_sample_count);
                     self.is_speaking = false;
                     self.speech_sample_count = 0;
-                    let _ = app_handle.emit("speech-ended", SpeechEventPayload { duration_ms: Some(duration_ms) });
+                    let _ = app_handle.emit("speech-ended", SpeechEventPayload { 
+                        duration_ms: Some(duration_ms),
+                        lookback_samples: None,
+                        lookback_offset_ms: None,
+                    });
                     println!("[SpeechDetector] Speech ended (duration: {}ms)", duration_ms);
                 }
             }

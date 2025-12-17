@@ -273,22 +273,13 @@ impl AudioMixer {
         // AEC3 requires exactly frame_samples * channels samples per frame
         let frame_size = AEC_FRAME_SAMPLES * self.channels as usize;
         
-        // Minimum samples needed: one full frame for AEC, or any aligned amount without
-        let min_samples = if aec_enabled && self.aec.is_some() {
-            frame_size
-        } else {
-            self.channels as usize // At least one sample per channel
-        };
+        // Always process in frame-sized chunks for consistent output rate
+        // This ensures visualization scroll rate is the same regardless of AEC state
+        let min_samples = frame_size;
         
         // Process frames while we have enough data
         while self.buffer1.len() >= min_samples && self.buffer2.len() >= min_samples {
-            let process_count = if aec_enabled && self.aec.is_some() {
-                frame_size
-            } else {
-                // Without AEC, process all available (aligned to channels)
-                let available = std::cmp::min(self.buffer1.len(), self.buffer2.len());
-                (available / self.channels as usize) * self.channels as usize
-            };
+            let process_count = frame_size;
             
             if process_count == 0 {
                 break;
