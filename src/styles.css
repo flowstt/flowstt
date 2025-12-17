@@ -28,6 +28,18 @@ body {
   height: 100vh;
   background: inherit;
   overflow: hidden;
+  -webkit-app-region: drag;
+}
+
+/* Exclude interactive elements from window drag region */
+button,
+input,
+select,
+textarea,
+canvas,
+.toggle-switch,
+.result-box {
+  -webkit-app-region: no-drag;
 }
 
 .container {
@@ -80,13 +92,7 @@ body {
   align-items: flex-start;
   padding: 0.25rem 0.5rem;
   margin-top: 0;
-  cursor: grab;
-  user-select: none;
   flex-shrink: 0;
-}
-
-.app-header:active {
-  cursor: grabbing;
 }
 
 .app-logo {

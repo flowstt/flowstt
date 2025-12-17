@@ -25,13 +25,17 @@ The application window SHALL display without a native title bar (window decorati
 - **THEN** no native title bar or window frame decorations are visible
 
 ### Requirement: Custom Drag Region
-The application SHALL provide a custom drag region in the header area to allow window repositioning without a native title bar.
+The application window background SHALL be draggable to allow window repositioning without a native title bar. Interactive elements (buttons, inputs, selects, toggles, canvases) SHALL be excluded from the drag region.
 
-#### Scenario: User drags window via header
-- **WHEN** the user clicks and drags on the header area
+#### Scenario: User drags window via background
+- **WHEN** the user clicks and drags on any non-interactive background area
 - **THEN** the window moves with the cursor to reposition on screen
 
-#### Scenario: Drag region visual feedback
-- **WHEN** the user hovers over the drag region
-- **THEN** the cursor indicates the area is draggable
+#### Scenario: Interactive elements remain functional
+- **WHEN** the user clicks on a button, input, select, toggle, or canvas
+- **THEN** the element receives the click event normally without initiating window drag
+
+#### Scenario: Windows platform support
+- **WHEN** the application runs on Windows
+- **THEN** the `-webkit-app-region: drag` CSS property enables native window dragging
 
