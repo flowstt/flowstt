@@ -1015,6 +1015,7 @@ let source2Select: HTMLSelectElement | null;
 let recordBtn: HTMLButtonElement | null;
 let monitorToggle: HTMLInputElement | null;
 let aecToggle: HTMLInputElement | null;
+let modeSelect: HTMLSelectElement | null;
 let statusEl: HTMLElement | null;
 let resultEl: HTMLElement | null;
 let modelWarning: HTMLElement | null;
@@ -1026,10 +1027,14 @@ let spectrogramCanvas: HTMLCanvasElement | null;
 let speechActivityCanvas: HTMLCanvasElement | null;
 let closeBtn: HTMLButtonElement | null;
 
+// Recording mode type matching backend
+type RecordingMode = "Mixed" | "EchoCancel";
+
 // State
 let isRecording = false;
 let isMonitoring = false;
 let isAecEnabled = false;
+let recordingMode: RecordingMode = "Mixed";
 let wasMonitoringBeforeRecording = false;
 let allDevices: AudioDevice[] = [];
 let waveformRenderer: WaveformRenderer | null = null;
@@ -1062,6 +1067,9 @@ async function loadDevices() {
     if (aecToggle) {
       aecToggle.disabled = !hasDevices;
     }
+    
+    // Update mode selector availability
+    updateModeSelector();
   } catch (error) {
     console.error("Failed to load devices:", error);
     if (source1Select) {
@@ -1117,6 +1125,9 @@ function hasAnySourceSelected(): boolean {
 
 // Handle source selection changes - reconfigure capture if active
 async function onSourceChange() {
+  // Always update mode selector when sources change
+  updateModeSelector();
+  
   if (!isMonitoring && !isRecording) {
     // Not active, nothing to do
     return;
@@ -1179,10 +1190,7 @@ async function onSourceChange() {
     // Restart recording with new sources
     try {
       await invoke("start_recording", { source1Id, source2Id });
-      const statusText = source1Id && source2Id 
-        ? "Recording (Mixed)..." 
-        : "Recording...";
-      setStatus(statusText, "loading");
+      updateStatusForCurrentState();
     } catch (error) {
       console.error("Error reconfiguring recording:", error);
       setStatus(`Error: ${error}`, "error");
@@ -1191,10 +1199,7 @@ async function onSourceChange() {
     // Restart monitoring with new sources
     try {
       await invoke("start_monitor", { source1Id, source2Id });
-      const statusText = source1Id && source2Id 
-        ? "Monitoring (Mixed)..." 
-        : "Monitoring...";
-      setStatus(statusText, "loading");
+      updateStatusForCurrentState();
     } catch (error) {
       console.error("Error reconfiguring monitor:", error);
       setStatus(`Error: ${error}`, "error");
@@ -1382,6 +1387,74 @@ async function toggleAec() {
   }
 }
 
+async function onModeChange() {
+  if (!modeSelect) return;
+
+  const newMode = modeSelect.value as RecordingMode;
+  try {
+    await invoke("set_recording_mode", { mode: newMode });
+    recordingMode = newMode;
+    console.log(`Recording mode set to: ${recordingMode}`);
+    
+    // Update status if currently monitoring/recording
+    if (isMonitoring || isRecording) {
+      updateStatusForCurrentState();
+    }
+  } catch (error) {
+    console.error("Set recording mode error:", error);
+    // Revert selector on error
+    modeSelect.value = recordingMode;
+  }
+}
+
+// Update the mode selector availability based on source selection
+function updateModeSelector() {
+  if (!modeSelect) return;
+
+  const { source1Id, source2Id } = getSelectedSources();
+  const hasTwoSources = source1Id !== null && source2Id !== null;
+  
+  // Enable/disable the mode selector based on source count
+  modeSelect.disabled = !hasTwoSources;
+  
+  // If only one source is selected and mode was EchoCancel, switch to Mixed
+  if (!hasTwoSources && recordingMode === "EchoCancel") {
+    modeSelect.value = "Mixed";
+    recordingMode = "Mixed";
+    invoke("set_recording_mode", { mode: "Mixed" }).catch(e => {
+      console.error("Failed to reset recording mode:", e);
+    });
+  }
+}
+
+// Update status message based on current state
+function updateStatusForCurrentState() {
+  const { source1Id, source2Id } = getSelectedSources();
+  const hasTwoSources = source1Id !== null && source2Id !== null;
+  
+  let statusText: string;
+  if (isRecording) {
+    if (hasTwoSources) {
+      statusText = recordingMode === "EchoCancel" 
+        ? "Recording (Voice Only)..." 
+        : "Recording (Mixed)...";
+    } else {
+      statusText = "Recording...";
+    }
+  } else if (isMonitoring) {
+    if (hasTwoSources) {
+      statusText = recordingMode === "EchoCancel" 
+        ? "Monitoring (Voice Only)..." 
+        : "Monitoring (Mixed)...";
+    } else {
+      statusText = "Monitoring...";
+    }
+  } else {
+    statusText = "";
+  }
+  setStatus(statusText, statusText ? "loading" : "normal");
+}
+
 async function toggleMonitor() {
   if (!monitorToggle) return;
 
@@ -1424,10 +1497,7 @@ async function toggleMonitor() {
       isMonitoring = true;
       monitorToggle.checked = true;
       
-      const statusText = source1Id && source2Id 
-        ? "Monitoring (Mixed)..." 
-        : "Monitoring...";
-      setStatus(statusText, "loading");
+      updateStatusForCurrentState();
       
       waveformRenderer?.clear();
       waveformRenderer?.start();
@@ -1527,10 +1597,7 @@ async function toggleRecording() {
       recordBtn.textContent = "Stop";
       recordBtn.classList.add("recording");
       
-      const statusText = source1Id && source2Id 
-        ? "Recording (Mixed)..." 
-        : "Recording...";
-      setStatus(statusText, "loading");
+      updateStatusForCurrentState();
       
       // Disable monitor toggle during recording (can't toggle it)
       if (monitorToggle) {
@@ -1571,6 +1638,7 @@ window.addEventListener("DOMContentLoaded", () => {
   recordBtn = document.querySelector("#record-btn");
   monitorToggle = document.querySelector("#monitor-toggle");
   aecToggle = document.querySelector("#aec-toggle");
+  modeSelect = document.querySelector("#mode-select");
   statusEl = document.querySelector("#status");
   resultEl = document.querySelector("#transcription-result");
   modelWarning = document.querySelector("#model-warning");
@@ -1629,6 +1697,7 @@ window.addEventListener("DOMContentLoaded", () => {
   recordBtn?.addEventListener("click", toggleRecording);
   monitorToggle?.addEventListener("change", toggleMonitor);
   aecToggle?.addEventListener("change", toggleAec);
+  modeSelect?.addEventListener("change", onModeChange);
   downloadModelBtn?.addEventListener("click", downloadModel);
   source1Select?.addEventListener("change", onSourceChange);
   source2Select?.addEventListener("change", onSourceChange);

@@ -18,6 +18,16 @@ pub enum AudioSourceType {
     Mixed,
 }
 
+/// Recording mode - determines how multiple audio sources are combined
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingMode {
+    /// Mix both streams together (default behavior)
+    #[default]
+    Mixed,
+    /// Echo cancellation mode - output only echo-cancelled primary source
+    EchoCancel,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AudioDevice {
     pub id: String,

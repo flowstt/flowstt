@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use aec3::voip::VoipAec3;
-use crate::audio::AudioSourceType;
+use crate::audio::{AudioSourceType, RecordingMode};
 
 /// Audio device information from PipeWire
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,11 +75,14 @@ pub struct PipeWireBackend {
     /// Echo cancellation enabled flag (shared with mixer, kept for lifetime)
     #[allow(dead_code)]
     aec_enabled: Arc<Mutex<bool>>,
+    /// Recording mode (shared with mixer, kept for lifetime)
+    #[allow(dead_code)]
+    recording_mode: Arc<Mutex<RecordingMode>>,
 }
 
 impl PipeWireBackend {
-    /// Create and start the PipeWire backend with shared AEC enabled flag
-    pub fn new(aec_enabled: Arc<Mutex<bool>>) -> Result<Self, String> {
+    /// Create and start the PipeWire backend with shared AEC enabled flag and recording mode
+    pub fn new(aec_enabled: Arc<Mutex<bool>>, recording_mode: Arc<Mutex<RecordingMode>>) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (audio_tx, audio_rx) = mpsc::channel();
         let input_devices = Arc::new(Mutex::new(Vec::new()));
@@ -90,6 +93,7 @@ impl PipeWireBackend {
         let system_devices_clone = Arc::clone(&system_devices);
         let sample_rate_clone = Arc::clone(&sample_rate);
         let aec_enabled_clone = Arc::clone(&aec_enabled);
+        let recording_mode_clone = Arc::clone(&recording_mode);
 
         let thread_handle = thread::spawn(move || {
             if let Err(e) = run_pipewire_thread(
@@ -99,6 +103,7 @@ impl PipeWireBackend {
                 system_devices_clone,
                 sample_rate_clone,
                 aec_enabled_clone,
+                recording_mode_clone,
             ) {
                 eprintln!("PipeWire thread error: {}", e);
             }
@@ -115,6 +120,7 @@ impl PipeWireBackend {
             _thread_handle: thread_handle,
             sample_rate,
             aec_enabled,
+            recording_mode,
         })
     }
 
@@ -180,12 +186,18 @@ struct AudioMixer {
     output_tx: mpsc::Sender<PwAudioSamples>,
     /// Flag to enable/disable AEC (shared with main thread)
     aec_enabled: Arc<Mutex<bool>>,
+    /// Recording mode - Mixed or EchoCancel (shared with main thread)
+    recording_mode: Arc<Mutex<RecordingMode>>,
     /// AEC3 pipeline (created when in mixed mode with 2 streams)
     aec: Option<VoipAec3>,
 }
 
 impl AudioMixer {
-    fn new(output_tx: mpsc::Sender<PwAudioSamples>, aec_enabled: Arc<Mutex<bool>>) -> Self {
+    fn new(
+        output_tx: mpsc::Sender<PwAudioSamples>,
+        aec_enabled: Arc<Mutex<bool>>,
+        recording_mode: Arc<Mutex<RecordingMode>>,
+    ) -> Self {
         Self {
             buffer1: Vec::new(),
             buffer2: Vec::new(),
@@ -193,6 +205,7 @@ impl AudioMixer {
             channels: 2,
             output_tx,
             aec_enabled,
+            recording_mode,
             aec: None,
         }
     }
@@ -255,6 +268,7 @@ impl AudioMixer {
     /// Try to mix available samples and send
     fn try_mix_and_send(&mut self) {
         let aec_enabled = *self.aec_enabled.lock().unwrap();
+        let recording_mode = *self.recording_mode.lock().unwrap();
         
         // AEC3 requires exactly frame_samples * channels samples per frame
         let frame_size = AEC_FRAME_SAMPLES * self.channels as usize;
@@ -306,15 +320,40 @@ impl AudioMixer {
                 mic_samples
             };
             
-            // Mix processed mic with system audio (0.5 gain each to prevent clipping)
-            let mixed: Vec<f32> = processed_mic.iter()
-                .zip(ref_samples.iter())
-                .map(|(&s1, &s2)| (s1 + s2) * 0.5)
-                .collect();
+            // Generate output based on recording mode
+            let output: Vec<f32> = match recording_mode {
+                RecordingMode::Mixed => {
+                    // Mix processed mic with system audio (0.5 gain each to prevent clipping)
+                    processed_mic.iter()
+                        .zip(ref_samples.iter())
+                        .map(|(&s1, &s2)| (s1 + s2) * 0.5)
+                        .collect()
+                }
+                RecordingMode::EchoCancel => {
+                    // Output only the processed (or raw) mic signal - no mixing
+                    // This should NOT contain any system audio
+                    processed_mic
+                }
+            };
             
-            // Send mixed output
+            // Debug: log RMS levels to verify which audio is in output
+            static LOG_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let count = LOG_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count % 500 == 0 {
+                // Note: processed_mic may be different from original mic_samples if AEC applied
+                let ref_rms: f32 = if !ref_samples.is_empty() {
+                    (ref_samples.iter().map(|s| s * s).sum::<f32>() / ref_samples.len() as f32).sqrt()
+                } else { 0.0 };
+                let out_rms: f32 = if !output.is_empty() {
+                    (output.iter().map(|s| s * s).sum::<f32>() / output.len() as f32).sqrt()
+                } else { 0.0 };
+                println!("AudioMixer: mode={:?}, aec={}, ref_rms={:.4}, out_rms={:.4}", 
+                    recording_mode, aec_enabled, ref_rms, out_rms);
+            }
+            
+            // Send output
             let _ = self.output_tx.send(PwAudioSamples {
-                samples: mixed,
+                samples: output,
                 channels: self.channels,
             });
         }
@@ -345,6 +384,7 @@ fn run_pipewire_thread(
     system_devices: Arc<Mutex<Vec<PwAudioDevice>>>,
     sample_rate: Arc<Mutex<u32>>,
     aec_enabled: Arc<Mutex<bool>>,
+    recording_mode: Arc<Mutex<RecordingMode>>,
 ) -> Result<(), String> {
     // Initialize PipeWire
     pipewire::init();
@@ -421,8 +461,8 @@ fn run_pipewire_thread(
         })
         .register();
 
-    // Create mixer with AEC enabled flag
-    let mixer = Rc::new(RefCell::new(AudioMixer::new(audio_tx, aec_enabled)));
+    // Create mixer with AEC enabled flag and recording mode
+    let mixer = Rc::new(RefCell::new(AudioMixer::new(audio_tx, aec_enabled, recording_mode)));
 
     // Thread state - share system_map to know which IDs are sinks
     let state = Rc::new(RefCell::new(PwThreadState {

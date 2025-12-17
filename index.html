@@ -57,14 +57,14 @@
       <div class="controls-bar">
         <div class="selectors">
           <div class="source-selector">
-            <label for="source1-select">Source 1</label>
+            <label for="source1-select">Primary (Mic)</label>
             <select id="source1-select">
               <option value="">Loading...</option>
             </select>
           </div>
 
           <div class="source-selector">
-            <label for="source2-select">Source 2</label>
+            <label for="source2-select">Reference (System)</label>
             <select id="source2-select">
               <option value="">Loading...</option>
             </select>
@@ -82,6 +82,13 @@
             <span class="toggle-slider"></span>
             <span class="toggle-label">Echo Cancel</span>
           </label>
+          <div class="mode-selector">
+            <label for="mode-select">Mode</label>
+            <select id="mode-select" disabled>
+              <option value="Mixed">Mixed</option>
+              <option value="EchoCancel">Voice Only</option>
+            </select>
+          </div>
           <button id="record-btn" disabled>Record</button>
         </div>
       </div>

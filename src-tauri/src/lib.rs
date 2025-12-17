@@ -3,7 +3,7 @@ mod pipewire_audio;
 mod processor;
 mod transcribe;
 
-use audio::{AudioDevice, AudioSourceType, RecordingState, generate_recording_filename, save_to_wav};
+use audio::{AudioDevice, AudioSourceType, RecordingMode, RecordingState, generate_recording_filename, save_to_wav};
 use pipewire_audio::{PipeWireBackend, PwAudioDevice};
 use std::env;
 use std::path::PathBuf;
@@ -37,6 +37,8 @@ struct AppState {
     processing_active: Arc<Mutex<bool>>,
     /// Flag to enable/disable echo cancellation in the mixer
     aec_enabled: Arc<Mutex<bool>>,
+    /// Recording mode - determines how multiple sources are combined
+    recording_mode: Arc<Mutex<RecordingMode>>,
 }
 
 /// Convert PipeWire device to frontend AudioDevice format
@@ -406,6 +408,17 @@ fn is_aec_enabled(state: State<AppState>) -> bool {
 }
 
 #[tauri::command]
+fn set_recording_mode(mode: RecordingMode, state: State<AppState>) {
+    println!("set_recording_mode called with: {:?}", mode);
+    *state.recording_mode.lock().unwrap() = mode;
+}
+
+#[tauri::command]
+fn get_recording_mode(state: State<AppState>) -> RecordingMode {
+    *state.recording_mode.lock().unwrap()
+}
+
+#[tauri::command]
 fn transcribe(audio_data: Vec<f32>, state: State<AppState>) -> Result<String, String> {
     let mut transcriber = state.transcriber.lock().unwrap();
     transcriber.transcribe(&audio_data)
@@ -442,8 +455,11 @@ pub fn run() {
     // Create shared AEC enabled flag
     let aec_enabled = Arc::new(Mutex::new(false));
     
-    // Initialize PipeWire backend with shared AEC flag
-    let pipewire = match PipeWireBackend::new(Arc::clone(&aec_enabled)) {
+    // Create shared recording mode
+    let recording_mode = Arc::new(Mutex::new(RecordingMode::Mixed));
+    
+    // Initialize PipeWire backend with shared flags
+    let pipewire = match PipeWireBackend::new(Arc::clone(&aec_enabled), Arc::clone(&recording_mode)) {
         Ok(pw) => {
             println!("PipeWire audio backend initialized");
             Some(pw)
@@ -461,6 +477,7 @@ pub fn run() {
             pipewire: Arc::new(Mutex::new(pipewire)),
             processing_active: Arc::new(Mutex::new(false)),
             aec_enabled,
+            recording_mode,
         })
         .invoke_handler(tauri::generate_handler![
             list_all_sources,
@@ -472,6 +489,8 @@ pub fn run() {
             is_monitoring,
             set_aec_enabled,
             is_aec_enabled,
+            set_recording_mode,
+            get_recording_mode,
             transcribe,
             check_model_status,
             download_model,
