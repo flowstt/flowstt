@@ -90,6 +90,12 @@ pub struct SpeechDetector {
     silence_sample_count: u32,
     /// Counter for speech duration (from confirmed start)
     speech_sample_count: u64,
+    /// Grace samples allowed during onset (brief dips don't reset counters)
+    onset_grace_samples: u32,
+    /// Current grace counter for voiced onset
+    voiced_grace_count: u32,
+    /// Current grace counter for whisper onset
+    whisper_grace_count: u32,
     /// Whether we've initialized (first sample processed)
     initialized: bool,
     /// Last computed amplitude in dB (for metrics)
@@ -112,29 +118,30 @@ impl SpeechDetector {
     /// Create a speech detector with default dual-mode configuration.
     /// 
     /// Default parameters:
-    /// - Voiced mode: -40dB threshold, ZCR 0.01-0.20, centroid 250-4000Hz, 100ms onset
-    /// - Whisper mode: -50dB threshold, ZCR 0.10-0.40, centroid 400-6000Hz, 150ms onset
-    /// - Transient rejection: ZCR > 0.40 AND centroid > 5500Hz
+    /// - Voiced mode: -42dB threshold, ZCR 0.01-0.30, centroid 200-5500Hz, 80ms onset
+    /// - Whisper mode: -52dB threshold, ZCR 0.08-0.45, centroid 300-7000Hz, 120ms onset
+    /// - Transient rejection: ZCR > 0.45 AND centroid > 6500Hz
     /// - Hold time: 300ms
+    /// - Onset grace period: 30ms (brief dips in features don't reset onset counters)
     pub fn with_defaults(sample_rate: u32) -> Self {
         let hold_samples = (sample_rate as u64 * 300 / 1000) as u32;
         
         Self {
             sample_rate,
             voiced_config: SpeechModeConfig {
-                threshold_db: -40.0,
-                zcr_range: (0.01, 0.20),
-                centroid_range: (250.0, 4000.0),
-                onset_samples: (sample_rate as u64 * 100 / 1000) as u32,
+                threshold_db: -42.0,           // Slightly more sensitive
+                zcr_range: (0.01, 0.30),       // Allow higher ZCR for fricatives in speech
+                centroid_range: (200.0, 5500.0), // Wider range for varied speech
+                onset_samples: (sample_rate as u64 * 80 / 1000) as u32, // Faster onset (80ms)
             },
             whisper_config: SpeechModeConfig {
-                threshold_db: -50.0,
-                zcr_range: (0.10, 0.40),
-                centroid_range: (400.0, 6000.0),
-                onset_samples: (sample_rate as u64 * 150 / 1000) as u32,
+                threshold_db: -52.0,           // Slightly more sensitive
+                zcr_range: (0.08, 0.45),       // Broader ZCR range
+                centroid_range: (300.0, 7000.0), // Wider range
+                onset_samples: (sample_rate as u64 * 120 / 1000) as u32, // Faster onset (120ms)
             },
-            transient_zcr_threshold: 0.40,
-            transient_centroid_threshold: 5500.0,
+            transient_zcr_threshold: 0.45,      // Slightly higher to not reject breathy speech
+            transient_centroid_threshold: 6500.0, // Higher to avoid rejecting high-pitched speech
             hold_samples,
             is_speaking: false,
             is_pending_voiced: false,
@@ -143,6 +150,9 @@ impl SpeechDetector {
             whisper_onset_count: 0,
             silence_sample_count: 0,
             speech_sample_count: 0,
+            onset_grace_samples: (sample_rate as u64 * 30 / 1000) as u32, // 30ms grace period
+            voiced_grace_count: 0,
+            whisper_grace_count: 0,
             initialized: false,
             last_amplitude_db: f32::NEG_INFINITY,
             last_zcr: 0.0,
@@ -273,6 +283,8 @@ impl SpeechDetector {
         self.is_pending_whisper = false;
         self.voiced_onset_count = 0;
         self.whisper_onset_count = 0;
+        self.voiced_grace_count = 0;
+        self.whisper_grace_count = 0;
     }
 
     /// Get the current speech detection metrics.
@@ -326,6 +338,8 @@ impl AudioProcessor for SpeechDetector {
         let is_whisper = self.matches_whisper_mode(db, zcr, centroid);
         let is_speech_candidate = is_voiced || is_whisper;
 
+        let samples_len = samples.len() as u32;
+
         if is_speech_candidate {
             // Sound matching speech features detected
             self.silence_sample_count = 0;
@@ -335,10 +349,9 @@ impl AudioProcessor for SpeechDetector {
                 self.speech_sample_count += samples.len() as u64;
             } else {
                 // Handle onset accumulation based on which mode matches
-                let samples_len = samples.len() as u32;
-
                 if is_voiced {
-                    // Accumulate voiced onset
+                    // Accumulate voiced onset, reset grace counter
+                    self.voiced_grace_count = 0;
                     if !self.is_pending_voiced {
                         self.is_pending_voiced = true;
                         self.voiced_onset_count = samples_len;
@@ -358,7 +371,8 @@ impl AudioProcessor for SpeechDetector {
                 }
 
                 if is_whisper {
-                    // Accumulate whisper onset (can run in parallel with voiced)
+                    // Accumulate whisper onset (can run in parallel with voiced), reset grace counter
+                    self.whisper_grace_count = 0;
                     if !self.is_pending_whisper {
                         self.is_pending_whisper = true;
                         self.whisper_onset_count = samples_len;
@@ -377,14 +391,29 @@ impl AudioProcessor for SpeechDetector {
                 }
             }
         } else {
-            // No speech-like features detected
-            if self.is_pending_voiced || self.is_pending_whisper {
-                // Cancel pending speech - features didn't persist
-                self.reset_onset_state();
+            // No speech-like features detected - use grace period before resetting onset
+            if self.is_pending_voiced {
+                self.voiced_grace_count += samples_len;
+                if self.voiced_grace_count >= self.onset_grace_samples {
+                    // Grace period exceeded, reset voiced onset
+                    self.is_pending_voiced = false;
+                    self.voiced_onset_count = 0;
+                    self.voiced_grace_count = 0;
+                }
+            }
+            
+            if self.is_pending_whisper {
+                self.whisper_grace_count += samples_len;
+                if self.whisper_grace_count >= self.onset_grace_samples {
+                    // Grace period exceeded, reset whisper onset
+                    self.is_pending_whisper = false;
+                    self.whisper_onset_count = 0;
+                    self.whisper_grace_count = 0;
+                }
             }
             
             if self.is_speaking {
-                self.silence_sample_count += samples.len() as u32;
+                self.silence_sample_count += samples_len;
 
                 // Check if hold time has elapsed
                 if self.silence_sample_count >= self.hold_samples {
