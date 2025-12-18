@@ -14,8 +14,6 @@
   font-weight: 400;
 
   color: #f6f6f6;
-  background: linear-gradient(145deg, #0d1118 0%, #141a24 50%, #1e2433 100%);
-  min-height: 100vh;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -32,24 +30,44 @@
   --spectrogram-grid: rgba(255, 255, 255, 0.12);
 }
 
+html,
 body {
   margin: 0;
-  height: 100vh;
-  background: inherit;
+  padding: 0;
+  height: 100%;
+  background: transparent;
   overflow: hidden;
-  -webkit-app-region: drag;
 }
 
-/* Exclude interactive elements from window drag region */
-button,
-input,
-select,
-textarea,
-canvas,
-.toggle-switch,
-.result-box {
-  -webkit-app-region: no-drag;
+/* Prevent text selection, dragging, and other unwanted interactions */
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
+
+img {
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+  pointer-events: none;
+}
+
+/* App container with gradient and rounded corners */
+.app-container {
+  height: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #0d1118 0%, #141a24 50%, #1e2433 100%);
+  /* macOS-style window border */
+  border: 0.5px solid rgba(128, 128, 128, 0.4);
+  box-sizing: border-box;
+}
+
+/* Window dragging is handled by data-tauri-drag-region attribute in HTML */
 
 .container {
   margin: 0;
@@ -63,25 +81,26 @@ canvas,
 }
 
 .close-btn {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  width: 24px;
-  height: 24px;
+  position: fixed;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
   min-width: unset;
   padding: 0;
   background: transparent;
   border: none;
+  border-radius: 6px;
   color: #4a5568;
-  font-size: 1.1rem;
+  font-size: 1.25rem;
   font-weight: 300;
   line-height: 1;
   cursor: pointer;
-  transition: color 0.2s;
+  transition: color 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
+  z-index: 1000;
 }
 
 .close-btn:hover {

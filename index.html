@@ -9,8 +9,9 @@
   </head>
 
   <body>
-    <main class="container">
-      <button id="close-btn" class="close-btn" title="Close">&times;</button>
+    <div class="app-container" data-tauri-drag-region>
+    <button id="close-btn" class="close-btn" title="Close">&times;</button>
+    <main class="container" data-tauri-drag-region>
       <header class="app-header" data-tauri-drag-region>
         <img src="/src/assets/flowstt-landscape.svg" alt="FlowSTT" class="app-logo" />
         <span class="app-version">v0.1.0</span>
@@ -37,7 +38,7 @@
         </div>
       </div>
 
-      <div class="status-legend-row">
+      <div class="status-legend-row" data-tauri-drag-region>
         <div id="status" class="status"></div>
         <div class="speech-activity-legend">
           <span class="legend-item"><span class="legend-color" style="background: rgba(34, 197, 94, 0.5);"></span>Speaking</span>
@@ -97,5 +98,6 @@
         </div>
       </div>
     </main>
+    </div>
   </body>
 </html>

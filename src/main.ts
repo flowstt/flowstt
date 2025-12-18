@@ -1822,6 +1822,11 @@ async function toggleTranscribe() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  // Disable default context menu
+  document.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+  });
+
   source1Select = document.querySelector("#source1-select");
   source2Select = document.querySelector("#source2-select");
   monitorToggle = document.querySelector("#monitor-toggle");

@@ -11,13 +11,16 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "FlowSTT",
         "width": 900,
         "height": 650,
         "resizable": false,
-        "decorations": false
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": [0, 0, 0, 0]
       }
     ],
     "security": {
