@@ -33,10 +33,13 @@ hound = "3.5"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 libloading = "0.8"
 
+# Cross-platform dependencies for audio processing
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+aec3 = "0.1"  # Pure Rust port of WebRTC AEC3, supports 48kHz
+
 # Linux-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire = "0.8"
-aec3 = "0.1"  # Pure Rust port of WebRTC AEC3, supports 48kHz
 whisper-rs = "0.14"  # Linux uses whisper-rs (builds from source)
 
 # Windows-specific dependencies

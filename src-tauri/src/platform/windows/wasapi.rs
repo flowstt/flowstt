@@ -1,26 +1,29 @@
 //! WASAPI audio backend for Windows
 //!
-//! This module provides audio capture from input devices (microphones) using
-//! Windows Audio Session API (WASAPI). Currently supports single-source capture only.
-//! System audio capture (loopback) and multi-source mixing are stubbed for future implementation.
+//! This module provides full audio capture functionality using Windows Audio Session API (WASAPI):
+//! - Input device capture (microphones)
+//! - System audio capture (loopback from render endpoints)
+//! - Multi-source capture with mixing
+//! - Echo cancellation using AEC3
 
 use crate::audio::{AudioSourceType, RecordingMode};
 use crate::platform::{AudioBackend, AudioSamples, PlatformAudioDevice};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use aec3::voip::VoipAec3;
 use windows::core::{GUID, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
-    eCapture, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceCollection,
+    eCapture, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceCollection,
     IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
-    STGM_READ,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
 };
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
@@ -35,10 +38,14 @@ const WAVE_FORMAT_PCM: u16 = 1;
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
 
 /// KSDATAFORMAT_SUBTYPE_IEEE_FLOAT GUID
-const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID = GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
+const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
+    GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
 
 /// Target sample rate for output (matches Linux backend)
 const TARGET_SAMPLE_RATE: u32 = 48000;
+
+/// AEC3 frame size: 10ms at 48kHz = 480 samples per channel
+const AEC_FRAME_SAMPLES: usize = 480;
 
 /// Internal audio samples for channel communication
 struct WasapiAudioSamples {
@@ -46,10 +53,17 @@ struct WasapiAudioSamples {
     channels: u16,
 }
 
+/// Samples from a stream thread to the mixer
+struct StreamSamples {
+    stream_index: usize,
+    samples: Vec<f32>,
+}
+
 /// Commands sent to the capture thread
 enum CaptureCommand {
-    Start {
-        device_id: String,
+    StartSources {
+        source1_id: Option<String>,
+        source2_id: Option<String>,
         result_tx: mpsc::Sender<Result<(), String>>,
     },
     Stop,
@@ -64,17 +78,17 @@ pub struct WasapiBackend {
     audio_rx: Mutex<mpsc::Receiver<WasapiAudioSamples>>,
     /// Cached input devices
     input_devices: Arc<Mutex<Vec<PlatformAudioDevice>>>,
+    /// Cached system devices (loopback sources)
+    system_devices: Arc<Mutex<Vec<PlatformAudioDevice>>>,
     /// Sample rate (always 48kHz after resampling)
     sample_rate: u32,
     /// Capture thread handle
     _thread_handle: JoinHandle<()>,
     /// Flag indicating if capture is active
     is_capturing: Arc<AtomicBool>,
-    /// AEC enabled flag (unused for now, kept for API compatibility)
-    #[allow(dead_code)]
+    /// AEC enabled flag (shared with mixer)
     aec_enabled: Arc<Mutex<bool>>,
-    /// Recording mode (unused for now, kept for API compatibility)
-    #[allow(dead_code)]
+    /// Recording mode (shared with mixer)
     recording_mode: Arc<Mutex<RecordingMode>>,
 }
 
@@ -87,42 +101,53 @@ impl WasapiBackend {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (audio_tx, audio_rx) = mpsc::channel();
         let input_devices = Arc::new(Mutex::new(Vec::new()));
+        let system_devices = Arc::new(Mutex::new(Vec::new()));
         let is_capturing = Arc::new(AtomicBool::new(false));
 
         // Initialize COM on this thread if not already initialized
-        // We use COINIT_MULTITHREADED for compatibility with capture thread
         let com_initialized = unsafe {
-            // CoInitializeEx returns S_OK (0) if successful, S_FALSE (1) if already initialized,
-            // or an error code. We only need to uninitialize if we initialized it ourselves.
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
             hr.is_ok()
         };
 
         // Enumerate devices
-        let devices = enumerate_input_devices();
+        let input_devs = enumerate_input_devices();
+        let system_devs = enumerate_render_devices();
 
-        // Uninitialize COM if we initialized it (balance the call)
+        // Uninitialize COM if we initialized it
         if com_initialized {
             unsafe {
                 CoUninitialize();
             }
         }
 
-        // Now handle the result
-        let devices = devices?;
-        *input_devices.lock().unwrap() = devices;
+        // Store devices
+        let input_devs = input_devs?;
+        let system_devs = system_devs?;
+        *input_devices.lock().unwrap() = input_devs;
+        *system_devices.lock().unwrap() = system_devs;
 
-        let input_devices_clone = Arc::clone(&input_devices);
+        let system_devices_clone = Arc::clone(&system_devices);
         let is_capturing_clone = Arc::clone(&is_capturing);
+        let aec_enabled_clone = Arc::clone(&aec_enabled);
+        let recording_mode_clone = Arc::clone(&recording_mode);
 
         let thread_handle = thread::spawn(move || {
-            run_capture_thread(cmd_rx, audio_tx, input_devices_clone, is_capturing_clone);
+            run_capture_thread(
+                cmd_rx,
+                audio_tx,
+                system_devices_clone,
+                is_capturing_clone,
+                aec_enabled_clone,
+                recording_mode_clone,
+            );
         });
 
         Ok(Self {
             cmd_tx,
             audio_rx: Mutex::new(audio_rx),
             input_devices,
+            system_devices,
             sample_rate: TARGET_SAMPLE_RATE,
             _thread_handle: thread_handle,
             is_capturing,
@@ -134,7 +159,6 @@ impl WasapiBackend {
 
 impl Drop for WasapiBackend {
     fn drop(&mut self) {
-        // Signal the capture thread to shutdown
         let _ = self.cmd_tx.send(CaptureCommand::Shutdown);
     }
 }
@@ -145,8 +169,7 @@ impl AudioBackend for WasapiBackend {
     }
 
     fn list_system_devices(&self) -> Vec<PlatformAudioDevice> {
-        // System audio capture (loopback) not yet implemented
-        Vec::new()
+        self.system_devices.lock().unwrap().clone()
     }
 
     fn sample_rate(&self) -> u32 {
@@ -158,27 +181,16 @@ impl AudioBackend for WasapiBackend {
         source1_id: Option<String>,
         source2_id: Option<String>,
     ) -> Result<(), String> {
-        // Check for two-source capture (not supported)
-        if source1_id.is_some() && source2_id.is_some() {
-            return Err(
-                "Multi-source capture is not yet implemented for Windows. Please select only one source."
-                    .to_string(),
-            );
-        }
-
-        // Get the device ID to capture from
-        let device_id = source1_id
-            .or(source2_id)
-            .ok_or("No audio source specified")?;
-
-        // Create a channel to receive the result
         let (result_tx, result_rx) = mpsc::channel();
 
         self.cmd_tx
-            .send(CaptureCommand::Start { device_id, result_tx })
+            .send(CaptureCommand::StartSources {
+                source1_id,
+                source2_id,
+                result_tx,
+            })
             .map_err(|e| format!("Failed to send start command: {}", e))?;
 
-        // Wait for the result from the capture thread (with timeout)
         match result_rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -222,12 +234,10 @@ pub fn create_backend(
 /// Enumerate available input devices (microphones)
 fn enumerate_input_devices() -> Result<Vec<PlatformAudioDevice>, String> {
     unsafe {
-        // Create device enumerator
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .map_err(|e| format!("Failed to create device enumerator: {}", e))?;
 
-        // Enumerate capture devices
         let collection: IMMDeviceCollection = enumerator
             .EnumAudioEndpoints(eCapture, windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE)
             .map_err(|e| format!("Failed to enumerate audio endpoints: {}", e))?;
@@ -240,7 +250,42 @@ fn enumerate_input_devices() -> Result<Vec<PlatformAudioDevice>, String> {
 
         for i in 0..count {
             if let Ok(device) = collection.Item(i) {
-                if let Some(platform_device) = device_to_platform_device(&device) {
+                if let Some(platform_device) =
+                    device_to_platform_device(&device, AudioSourceType::Input)
+                {
+                    devices.push(platform_device);
+                }
+            }
+        }
+
+        Ok(devices)
+    }
+}
+
+/// Enumerate available render devices (for loopback capture)
+fn enumerate_render_devices() -> Result<Vec<PlatformAudioDevice>, String> {
+    unsafe {
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| format!("Failed to create device enumerator: {}", e))?;
+
+        let collection: IMMDeviceCollection = enumerator
+            .EnumAudioEndpoints(eRender, windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE)
+            .map_err(|e| format!("Failed to enumerate render endpoints: {}", e))?;
+
+        let count = collection
+            .GetCount()
+            .map_err(|e| format!("Failed to get render device count: {}", e))?;
+
+        let mut devices = Vec::new();
+
+        for i in 0..count {
+            if let Ok(device) = collection.Item(i) {
+                if let Some(mut platform_device) =
+                    device_to_platform_device(&device, AudioSourceType::System)
+                {
+                    // Add (Loopback) suffix to distinguish from input devices
+                    platform_device.name = format!("{} (Loopback)", platform_device.name);
                     devices.push(platform_device);
                 }
             }
@@ -251,19 +296,19 @@ fn enumerate_input_devices() -> Result<Vec<PlatformAudioDevice>, String> {
 }
 
 /// Convert an IMMDevice to a PlatformAudioDevice
-fn device_to_platform_device(device: &IMMDevice) -> Option<PlatformAudioDevice> {
+fn device_to_platform_device(
+    device: &IMMDevice,
+    source_type: AudioSourceType,
+) -> Option<PlatformAudioDevice> {
     unsafe {
-        // Get device ID
         let id_ptr: PWSTR = device.GetId().ok()?;
         let id = pwstr_to_string(id_ptr);
         windows::Win32::System::Com::CoTaskMemFree(Some(id_ptr.0 as *const _));
 
-        // Get friendly name from property store
         let props: IPropertyStore = device.OpenPropertyStore(STGM_READ).ok()?;
         let prop_variant = props.GetValue(&PKEY_Device_FriendlyName).ok()?;
 
         let name = {
-            // Try to get string value from PROPVARIANT
             let name_str = prop_variant.to_string();
             if name_str.is_empty() {
                 "Unknown Device".to_string()
@@ -275,7 +320,7 @@ fn device_to_platform_device(device: &IMMDevice) -> Option<PlatformAudioDevice> 
         Some(PlatformAudioDevice {
             id,
             name,
-            source_type: AudioSourceType::Input,
+            source_type,
         })
     }
 }
@@ -292,53 +337,287 @@ fn pwstr_to_string(pwstr: PWSTR) -> String {
     }
 }
 
+/// Audio mixer for combining samples from multiple streams
+/// Note: This struct is NOT Send because VoipAec3 is not Send.
+/// It must be used only in the main capture thread.
+struct AudioMixer {
+    /// Buffer for stream 1 samples (typically microphone/input)
+    buffer1: Vec<f32>,
+    /// Buffer for stream 2 samples (typically system audio/reference)
+    buffer2: Vec<f32>,
+    /// Number of active streams (1 or 2)
+    num_streams: usize,
+    /// Channels per stream
+    channels: u16,
+    /// Output sender
+    output_tx: mpsc::Sender<WasapiAudioSamples>,
+    /// Flag to enable/disable AEC (shared with main thread)
+    aec_enabled: Arc<Mutex<bool>>,
+    /// Recording mode - Mixed or EchoCancel (shared with main thread)
+    recording_mode: Arc<Mutex<RecordingMode>>,
+    /// AEC3 pipeline (created when in mixed mode with 2 streams)
+    aec: Option<VoipAec3>,
+}
+
+impl AudioMixer {
+    fn new(
+        output_tx: mpsc::Sender<WasapiAudioSamples>,
+        aec_enabled: Arc<Mutex<bool>>,
+        recording_mode: Arc<Mutex<RecordingMode>>,
+    ) -> Self {
+        Self {
+            buffer1: Vec::new(),
+            buffer2: Vec::new(),
+            num_streams: 0,
+            channels: 2,
+            output_tx,
+            aec_enabled,
+            recording_mode,
+            aec: None,
+        }
+    }
+
+    fn set_num_streams(&mut self, num: usize) {
+        self.num_streams = num;
+        self.buffer1.clear();
+        self.buffer2.clear();
+
+        // Create AEC3 pipeline when in mixed mode (2 streams)
+        if num == 2 {
+            match VoipAec3::builder(48000, self.channels as usize, self.channels as usize)
+                .enable_high_pass(true)
+                .build()
+            {
+                Ok(aec) => {
+                    println!(
+                        "WASAPI: AEC3 initialized: 48kHz, {} channels, {}ms frames",
+                        self.channels,
+                        AEC_FRAME_SAMPLES * 1000 / 48000
+                    );
+                    self.aec = Some(aec);
+                }
+                Err(e) => {
+                    eprintln!("WASAPI: Failed to initialize AEC3: {:?}", e);
+                    self.aec = None;
+                }
+            }
+        } else {
+            self.aec = None;
+        }
+    }
+
+    /// Add samples from stream 1 (microphone/input device)
+    fn push_stream1(&mut self, samples: &[f32]) {
+        if self.num_streams == 1 {
+            // Single stream - send directly
+            let _ = self.output_tx.send(WasapiAudioSamples {
+                samples: samples.to_vec(),
+                channels: self.channels,
+            });
+        } else {
+            // Two streams - buffer and mix
+            self.buffer1.extend_from_slice(samples);
+            self.try_mix_and_send();
+        }
+    }
+
+    /// Add samples from stream 2 (system audio/reference)
+    fn push_stream2(&mut self, samples: &[f32]) {
+        if self.num_streams <= 1 {
+            return;
+        }
+        self.buffer2.extend_from_slice(samples);
+        self.try_mix_and_send();
+    }
+
+    /// Try to mix available samples and send
+    fn try_mix_and_send(&mut self) {
+        let aec_enabled = *self.aec_enabled.lock().unwrap();
+        let recording_mode = *self.recording_mode.lock().unwrap();
+
+        // AEC3 requires exactly frame_samples * channels samples per frame
+        let frame_size = AEC_FRAME_SAMPLES * self.channels as usize;
+
+        // Process frames while we have enough data
+        while self.buffer1.len() >= frame_size && self.buffer2.len() >= frame_size {
+            // Extract interleaved samples to process
+            let mic_samples: Vec<f32> = self.buffer1.drain(0..frame_size).collect();
+            let ref_samples: Vec<f32> = self.buffer2.drain(0..frame_size).collect();
+
+            // Apply AEC if enabled
+            let processed_mic = if aec_enabled {
+                if let Some(ref mut aec) = self.aec {
+                    let mut out = vec![0.0f32; mic_samples.len()];
+
+                    match aec.process(&mic_samples, Some(&ref_samples), false, &mut out) {
+                        Ok(_metrics) => out,
+                        Err(e) => {
+                            eprintln!("WASAPI: AEC3 process error: {:?}", e);
+                            mic_samples
+                        }
+                    }
+                } else {
+                    mic_samples
+                }
+            } else {
+                mic_samples
+            };
+
+            // Generate output based on recording mode
+            let output: Vec<f32> = match recording_mode {
+                RecordingMode::Mixed => {
+                    // Mix processed mic with system audio
+                    // Use soft clipping to handle peaks instead of reducing overall gain
+                    processed_mic
+                        .iter()
+                        .zip(ref_samples.iter())
+                        .map(|(&s1, &s2)| {
+                            let sum = s1 + s2;
+                            // Soft clip: tanh-style saturation for values beyond [-1, 1]
+                            if sum > 1.0 {
+                                1.0 - (-2.0 * (sum - 1.0)).exp() * 0.5
+                            } else if sum < -1.0 {
+                                -1.0 + (-2.0 * (-sum - 1.0)).exp() * 0.5
+                            } else {
+                                sum
+                            }
+                        })
+                        .collect()
+                }
+                RecordingMode::EchoCancel => {
+                    // Output only the processed mic signal - no mixing
+                    processed_mic
+                }
+            };
+
+            // Debug logging
+            static LOG_COUNTER: AtomicU32 = AtomicU32::new(0);
+            let count = LOG_COUNTER.fetch_add(1, Ordering::Relaxed);
+            if count % 500 == 0 {
+                let ref_rms: f32 = if !ref_samples.is_empty() {
+                    (ref_samples.iter().map(|s| s * s).sum::<f32>() / ref_samples.len() as f32)
+                        .sqrt()
+                } else {
+                    0.0
+                };
+                let out_rms: f32 = if !output.is_empty() {
+                    (output.iter().map(|s| s * s).sum::<f32>() / output.len() as f32).sqrt()
+                } else {
+                    0.0
+                };
+                println!(
+                    "WASAPI AudioMixer: mode={:?}, aec={}, ref_rms={:.4}, out_rms={:.4}",
+                    recording_mode, aec_enabled, ref_rms, out_rms
+                );
+            }
+
+            // Send output
+            let _ = self.output_tx.send(WasapiAudioSamples {
+                samples: output,
+                channels: self.channels,
+            });
+        }
+    }
+}
+
 /// Run the capture thread
 fn run_capture_thread(
     cmd_rx: mpsc::Receiver<CaptureCommand>,
     audio_tx: mpsc::Sender<WasapiAudioSamples>,
-    _input_devices: Arc<Mutex<Vec<PlatformAudioDevice>>>,
+    system_devices: Arc<Mutex<Vec<PlatformAudioDevice>>>,
     is_capturing: Arc<AtomicBool>,
+    aec_enabled: Arc<Mutex<bool>>,
+    recording_mode: Arc<Mutex<RecordingMode>>,
 ) {
     println!("WASAPI: Capture thread started");
-    
+
     unsafe {
-        // Initialize COM for this thread (MTA)
         let com_result = CoInitializeEx(None, COINIT_MULTITHREADED);
         if com_result.is_err() {
-            eprintln!("WASAPI: Failed to initialize COM on capture thread: {:?}", com_result);
-            // Drain any pending commands and respond with errors
+            eprintln!(
+                "WASAPI: Failed to initialize COM on capture thread: {:?}",
+                com_result
+            );
             while let Ok(cmd) = cmd_rx.try_recv() {
-                if let CaptureCommand::Start { result_tx, .. } = cmd {
-                    let _ = result_tx.send(Err(format!("COM initialization failed: {:?}", com_result)));
+                if let CaptureCommand::StartSources { result_tx, .. } = cmd {
+                    let _ =
+                        result_tx.send(Err(format!("COM initialization failed: {:?}", com_result)));
                 }
             }
             return;
         }
         println!("WASAPI: COM initialized on capture thread");
 
-        let mut capture_state: Option<CaptureState> = None;
+        // Create mixer (owned by this thread, NOT shared across threads)
+        let mut mixer = AudioMixer::new(audio_tx, aec_enabled, recording_mode);
+
+        // Channel for receiving samples from stream threads
+        let (stream_tx, stream_rx) = mpsc::channel::<StreamSamples>();
+
+        // Active capture state
+        let mut capture_manager: Option<MultiCaptureManager> = None;
 
         loop {
-            // Check for commands (non-blocking when capturing)
-            let timeout = if capture_state.is_some() {
+            // Process any samples from stream threads first
+            while let Ok(stream_samples) = stream_rx.try_recv() {
+                if stream_samples.stream_index == 1 {
+                    mixer.push_stream1(&stream_samples.samples);
+                } else {
+                    mixer.push_stream2(&stream_samples.samples);
+                }
+            }
+
+            let timeout = if capture_manager.is_some() {
                 std::time::Duration::from_millis(1)
             } else {
                 std::time::Duration::from_secs(1)
             };
 
             match cmd_rx.recv_timeout(timeout) {
-                Ok(CaptureCommand::Start { device_id, result_tx }) => {
+                Ok(CaptureCommand::StartSources {
+                    source1_id,
+                    source2_id,
+                    result_tx,
+                }) => {
                     // Stop any existing capture
-                    if let Some(state) = capture_state.take() {
-                        drop(state);
+                    if let Some(manager) = capture_manager.take() {
+                        drop(manager);
                     }
 
-                    // Start new capture
-                    match start_capture(&device_id) {
-                        Ok(state) => {
-                            println!("WASAPI: Started capture from device {}", device_id);
+                    // Determine which sources are loopback (system audio)
+                    let system_ids: std::collections::HashSet<String> = system_devices
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|d| d.id.clone())
+                        .collect();
+
+                    let is_loopback1 = source1_id
+                        .as_ref()
+                        .map(|id| system_ids.contains(id))
+                        .unwrap_or(false);
+                    let is_loopback2 = source2_id
+                        .as_ref()
+                        .map(|id| system_ids.contains(id))
+                        .unwrap_or(false);
+
+                    // Count streams
+                    let num_streams =
+                        source1_id.is_some() as usize + source2_id.is_some() as usize;
+                    mixer.set_num_streams(num_streams);
+
+                    // Start capture
+                    match MultiCaptureManager::new(
+                        source1_id,
+                        is_loopback1,
+                        source2_id,
+                        is_loopback2,
+                        stream_tx.clone(),
+                    ) {
+                        Ok(manager) => {
+                            println!("WASAPI: Started capture with {} sources", num_streams);
                             is_capturing.store(true, Ordering::SeqCst);
-                            capture_state = Some(state);
+                            capture_manager = Some(manager);
                             let _ = result_tx.send(Ok(()));
                         }
                         Err(e) => {
@@ -349,34 +628,149 @@ fn run_capture_thread(
                     }
                 }
                 Ok(CaptureCommand::Stop) => {
-                    if let Some(state) = capture_state.take() {
+                    if let Some(manager) = capture_manager.take() {
                         println!("WASAPI: Stopping capture");
-                        drop(state);
+                        drop(manager);
                     }
+                    mixer.set_num_streams(0);
                     is_capturing.store(false, Ordering::SeqCst);
                 }
                 Ok(CaptureCommand::Shutdown) => {
-                    if let Some(state) = capture_state.take() {
-                        drop(state);
+                    if let Some(manager) = capture_manager.take() {
+                        drop(manager);
                     }
                     is_capturing.store(false, Ordering::SeqCst);
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // Continue processing audio if capturing
+                    // Continue processing samples
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     break;
                 }
             }
+        }
 
-            // Process audio if capturing
-            if let Some(ref mut state) = capture_state {
-                if let Err(e) = process_capture(state, &audio_tx) {
-                    eprintln!("WASAPI: Capture error: {}", e);
-                    capture_state = None;
-                    is_capturing.store(false, Ordering::SeqCst);
+        CoUninitialize();
+    }
+}
+
+/// Manager for multiple capture streams
+struct MultiCaptureManager {
+    /// Stream 1 thread handle and stop flag
+    stream1: Option<(JoinHandle<()>, Arc<AtomicBool>)>,
+    /// Stream 2 thread handle and stop flag
+    stream2: Option<(JoinHandle<()>, Arc<AtomicBool>)>,
+}
+
+impl MultiCaptureManager {
+    fn new(
+        source1_id: Option<String>,
+        is_loopback1: bool,
+        source2_id: Option<String>,
+        is_loopback2: bool,
+        stream_tx: mpsc::Sender<StreamSamples>,
+    ) -> Result<Self, String> {
+        let mut stream1 = None;
+        let mut stream2 = None;
+
+        // Start stream 1 if specified
+        if let Some(device_id) = source1_id {
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_flag_clone = Arc::clone(&stop_flag);
+            let tx = stream_tx.clone();
+
+            let handle = thread::spawn(move || {
+                run_stream_capture(device_id, is_loopback1, 1, tx, stop_flag_clone);
+            });
+
+            stream1 = Some((handle, stop_flag));
+        }
+
+        // Start stream 2 if specified
+        if let Some(device_id) = source2_id {
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_flag_clone = Arc::clone(&stop_flag);
+            let tx = stream_tx;
+
+            let handle = thread::spawn(move || {
+                run_stream_capture(device_id, is_loopback2, 2, tx, stop_flag_clone);
+            });
+
+            stream2 = Some((handle, stop_flag));
+        }
+
+        Ok(Self { stream1, stream2 })
+    }
+}
+
+impl Drop for MultiCaptureManager {
+    fn drop(&mut self) {
+        // Signal streams to stop
+        if let Some((_, ref stop_flag)) = self.stream1 {
+            stop_flag.store(true, Ordering::SeqCst);
+        }
+        if let Some((_, ref stop_flag)) = self.stream2 {
+            stop_flag.store(true, Ordering::SeqCst);
+        }
+
+        // Wait for threads to finish
+        if let Some((handle, _)) = self.stream1.take() {
+            let _ = handle.join();
+        }
+        if let Some((handle, _)) = self.stream2.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Run capture for a single stream
+fn run_stream_capture(
+    device_id: String,
+    is_loopback: bool,
+    stream_index: usize,
+    stream_tx: mpsc::Sender<StreamSamples>,
+    stop_flag: Arc<AtomicBool>,
+) {
+    println!(
+        "WASAPI: Stream {} capture thread started (device={}, loopback={})",
+        stream_index, device_id, is_loopback
+    );
+
+    unsafe {
+        // Initialize COM for this thread
+        let com_result = CoInitializeEx(None, COINIT_MULTITHREADED);
+        if com_result.is_err() {
+            eprintln!(
+                "WASAPI: Stream {} failed to initialize COM: {:?}",
+                stream_index, com_result
+            );
+            return;
+        }
+
+        // Start capture
+        match start_capture(&device_id, is_loopback) {
+            Ok(mut state) => {
+                println!(
+                    "WASAPI: Stream {} capture started from device {}",
+                    stream_index, device_id
+                );
+
+                // Capture loop
+                while !stop_flag.load(Ordering::SeqCst) {
+                    if let Err(e) = process_capture(&mut state, stream_index, &stream_tx) {
+                        eprintln!("WASAPI: Stream {} capture error: {}", stream_index, e);
+                        break;
+                    }
                 }
+
+                println!("WASAPI: Stream {} capture stopped", stream_index);
+            }
+            Err(e) => {
+                eprintln!(
+                    "WASAPI: Stream {} failed to start capture: {}",
+                    stream_index, e
+                );
             }
         }
 
@@ -413,24 +807,20 @@ struct CaptureFormat {
 }
 
 /// Start capturing from a device
-unsafe fn start_capture(device_id: &str) -> Result<CaptureState, String> {
-    // Create device enumerator
+unsafe fn start_capture(device_id: &str, is_loopback: bool) -> Result<CaptureState, String> {
     let enumerator: IMMDeviceEnumerator =
         CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
             .map_err(|e| format!("Failed to create device enumerator: {}", e))?;
 
-    // Get the device by ID
     let device_id_wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
     let device: IMMDevice = enumerator
         .GetDevice(PCWSTR(device_id_wide.as_ptr()))
         .map_err(|e| format!("Failed to get device {}: {}", device_id, e))?;
 
-    // Activate audio client
     let audio_client: IAudioClient = device
         .Activate(CLSCTX_ALL, None)
         .map_err(|e| format!("Failed to activate audio client: {}", e))?;
 
-    // Get the mix format (device's native format)
     let mix_format_ptr = audio_client
         .GetMixFormat()
         .map_err(|e| format!("Failed to get mix format: {}", e))?;
@@ -439,22 +829,26 @@ unsafe fn start_capture(device_id: &str) -> Result<CaptureState, String> {
     let format = parse_wave_format(mix_format)?;
 
     println!(
-        "WASAPI: Device format: {}Hz, {} channels, {} bits, float={}",
-        format.sample_rate, format.channels, format.bits_per_sample, format.is_float
+        "WASAPI: Device format: {}Hz, {} channels, {} bits, float={}, loopback={}",
+        format.sample_rate, format.channels, format.bits_per_sample, format.is_float, is_loopback
     );
 
-    // Create event for buffer notifications
     let event_handle = CreateEventW(None, false, false, None)
         .map_err(|e| format!("Failed to create event: {}", e))?;
 
-    // Calculate buffer duration (100ms in 100-nanosecond units)
     let buffer_duration: i64 = 1_000_000; // 100ms
 
-    // Initialize audio client in shared mode with event callback
+    // Use loopback flag for system audio capture
+    let stream_flags = if is_loopback {
+        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+    } else {
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+    };
+
     audio_client
         .Initialize(
             AUDCLNT_SHAREMODE_SHARED,
-            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            stream_flags,
             buffer_duration,
             0,
             mix_format_ptr,
@@ -462,29 +856,24 @@ unsafe fn start_capture(device_id: &str) -> Result<CaptureState, String> {
         )
         .map_err(|e| format!("Failed to initialize audio client: {}", e))?;
 
-    // Set the event handle
     audio_client
         .SetEventHandle(event_handle)
         .map_err(|e| format!("Failed to set event handle: {}", e))?;
 
-    // Get capture client
     let capture_client: IAudioCaptureClient = audio_client
         .GetService()
         .map_err(|e| format!("Failed to get capture client: {}", e))?;
 
-    // Create resampler if needed
     let resampler = if format.sample_rate != TARGET_SAMPLE_RATE {
         Some(Resampler::new(format.sample_rate, TARGET_SAMPLE_RATE))
     } else {
         None
     };
 
-    // Start capture
     audio_client
         .Start()
         .map_err(|e| format!("Failed to start capture: {}", e))?;
 
-    // Free the format pointer
     windows::Win32::System::Com::CoTaskMemFree(Some(mix_format_ptr as *const _ as *const _));
 
     Ok(CaptureState {
@@ -501,7 +890,6 @@ fn parse_wave_format(format: &WAVEFORMATEX) -> Result<CaptureFormat, String> {
     let is_float;
     let bits_per_sample;
 
-    // Copy values from potentially packed struct to avoid alignment issues
     let format_tag = format.wFormatTag;
     let sample_rate = format.nSamplesPerSec;
     let channels = format.nChannels;
@@ -509,10 +897,8 @@ fn parse_wave_format(format: &WAVEFORMATEX) -> Result<CaptureFormat, String> {
 
     if format_tag == WAVE_FORMAT_EXTENSIBLE {
         let ext = unsafe { &*(format as *const WAVEFORMATEX as *const WAVEFORMATEXTENSIBLE) };
-        // Read packed fields safely using ptr::read_unaligned
-        let sub_format = unsafe {
-            std::ptr::read_unaligned(std::ptr::addr_of!(ext.SubFormat))
-        };
+        let sub_format =
+            unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(ext.SubFormat)) };
         let valid_bits = unsafe {
             std::ptr::read_unaligned(std::ptr::addr_of!(ext.Samples.wValidBitsPerSample))
         };
@@ -539,12 +925,11 @@ fn parse_wave_format(format: &WAVEFORMATEX) -> Result<CaptureFormat, String> {
 /// Process captured audio data
 unsafe fn process_capture(
     state: &mut CaptureState,
-    audio_tx: &mpsc::Sender<WasapiAudioSamples>,
+    stream_index: usize,
+    stream_tx: &mpsc::Sender<StreamSamples>,
 ) -> Result<(), String> {
-    // Wait for buffer event (10ms timeout)
     let wait_result = WaitForSingleObject(state.event_handle, 10);
     if wait_result.0 != 0 {
-        // Timeout or error - that's OK, just no data yet
         return Ok(());
     }
 
@@ -553,7 +938,6 @@ unsafe fn process_capture(
         let mut num_frames: u32 = 0;
         let mut flags: u32 = 0;
 
-        // Get the buffer
         let result = state.capture_client.GetBuffer(
             &mut buffer_ptr,
             &mut num_frames,
@@ -566,14 +950,8 @@ unsafe fn process_capture(
             break;
         }
 
-        // Convert to f32 samples
-        let samples = convert_to_f32(
-            buffer_ptr,
-            num_frames as usize,
-            &state.format,
-        );
+        let samples = convert_to_f32(buffer_ptr, num_frames as usize, &state.format);
 
-        // Release the buffer
         let _ = state.capture_client.ReleaseBuffer(num_frames);
 
         if samples.is_empty() {
@@ -594,10 +972,10 @@ unsafe fn process_capture(
             final_samples
         };
 
-        // Send samples
-        let _ = audio_tx.send(WasapiAudioSamples {
+        // Send to mixer thread via channel
+        let _ = stream_tx.send(StreamSamples {
+            stream_index,
             samples: stereo_samples,
-            channels: 2,
         });
     }
 
@@ -605,40 +983,34 @@ unsafe fn process_capture(
 }
 
 /// Convert raw audio buffer to f32 samples
-unsafe fn convert_to_f32(
-    buffer: *const u8,
-    num_frames: usize,
-    format: &CaptureFormat,
-) -> Vec<f32> {
+unsafe fn convert_to_f32(buffer: *const u8, num_frames: usize, format: &CaptureFormat) -> Vec<f32> {
     let num_samples = num_frames * format.channels as usize;
 
     if format.is_float && format.bits_per_sample == 32 {
-        // Already f32
         let f32_ptr = buffer as *const f32;
         std::slice::from_raw_parts(f32_ptr, num_samples).to_vec()
     } else if !format.is_float && format.bits_per_sample == 16 {
-        // 16-bit signed integer
         let i16_ptr = buffer as *const i16;
         let i16_slice = std::slice::from_raw_parts(i16_ptr, num_samples);
         i16_slice.iter().map(|&s| s as f32 / 32768.0).collect()
     } else if !format.is_float && format.bits_per_sample == 24 {
-        // 24-bit signed integer (packed)
         let mut samples = Vec::with_capacity(num_samples);
         for i in 0..num_samples {
             let offset = i * 3;
             let b0 = *buffer.add(offset) as i32;
             let b1 = *buffer.add(offset + 1) as i32;
             let b2 = *buffer.add(offset + 2) as i32;
-            // Sign extend from 24-bit
             let value = (b0 | (b1 << 8) | (b2 << 16)) << 8 >> 8;
             samples.push(value as f32 / 8388608.0);
         }
         samples
     } else if !format.is_float && format.bits_per_sample == 32 {
-        // 32-bit signed integer
         let i32_ptr = buffer as *const i32;
         let i32_slice = std::slice::from_raw_parts(i32_ptr, num_samples);
-        i32_slice.iter().map(|&s| s as f32 / 2147483648.0).collect()
+        i32_slice
+            .iter()
+            .map(|&s| s as f32 / 2147483648.0)
+            .collect()
     } else {
         eprintln!(
             "WASAPI: Unsupported format: float={}, bits={}",
@@ -677,7 +1049,6 @@ impl Resampler {
     }
 
     fn process(&mut self, samples: &[f32], channels: usize) -> Vec<f32> {
-        // Append new samples to buffer
         self.buffer.extend_from_slice(samples);
 
         let ratio = self.source_rate as f64 / self.target_rate as f64;
@@ -699,7 +1070,6 @@ impl Resampler {
                 let idx1 = (src_frame + 1) * channels + ch;
 
                 let sample = if idx1 < self.buffer.len() {
-                    // Linear interpolation
                     self.buffer[idx0] * (1.0 - frac as f32) + self.buffer[idx1] * frac as f32
                 } else if idx0 < self.buffer.len() {
                     self.buffer[idx0]
@@ -712,7 +1082,6 @@ impl Resampler {
             self.position += ratio;
         }
 
-        // Remove consumed samples from buffer
         let consumed_frames = self.position as usize;
         if consumed_frames > 0 {
             let consumed_samples = consumed_frames * channels;
