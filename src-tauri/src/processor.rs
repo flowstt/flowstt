@@ -23,6 +23,17 @@ pub struct SpeechEventPayload {
     pub lookback_offset_ms: Option<u32>,
 }
 
+/// Speech state change detected by the speech detector
+#[derive(Clone, Debug)]
+pub enum SpeechStateChange {
+    /// No change in speech state
+    None,
+    /// Speech started with lookback sample count
+    Started { lookback_samples: usize },
+    /// Speech ended with duration in milliseconds
+    Ended { duration_ms: u64 },
+}
+
 /// Speech detection metrics for visualization
 #[derive(Clone, Serialize)]
 pub struct SpeechMetrics {
@@ -131,6 +142,8 @@ pub struct SpeechDetector {
     lookback_threshold_db: f32,
     /// Last lookback offset in milliseconds (for metrics, set when speech confirmed)
     last_lookback_offset_ms: Option<u32>,
+    /// Last state change detected during process() - for transcribe mode integration
+    last_state_change: SpeechStateChange,
 }
 
 impl SpeechDetector {
@@ -194,6 +207,7 @@ impl SpeechDetector {
             lookback_filled: false,
             lookback_threshold_db: -55.0, // More sensitive than detection thresholds
             last_lookback_offset_ms: None,
+            last_state_change: SpeechStateChange::None,
         }
     }
 
@@ -417,10 +431,24 @@ impl SpeechDetector {
             lookback_offset_ms: self.last_lookback_offset_ms,
         }
     }
+
+    /// Get the last speech state change detected during process().
+    /// Returns the state change and resets it to None for the next call.
+    pub fn take_state_change(&mut self) -> SpeechStateChange {
+        std::mem::replace(&mut self.last_state_change, SpeechStateChange::None)
+    }
+
+    /// Get the last speech state change without resetting it.
+    pub fn peek_state_change(&self) -> &SpeechStateChange {
+        &self.last_state_change
+    }
 }
 
 impl AudioProcessor for SpeechDetector {
     fn process(&mut self, samples: &[f32], app_handle: &AppHandle) {
+        // Reset state change at start of each process call
+        self.last_state_change = SpeechStateChange::None;
+        
         // Step 0: Add samples to lookback buffer (always, for retroactive analysis)
         self.push_to_lookback_buffer(samples);
         
@@ -491,6 +519,12 @@ impl AudioProcessor for SpeechDetector {
                         let (lookback_samples, lookback_offset_ms) = self.find_lookback_start();
                         self.last_lookback_offset_ms = Some(lookback_offset_ms);
                         
+                        // Record state change for transcribe mode
+                        let lookback_sample_count = lookback_samples.len();
+                        self.last_state_change = SpeechStateChange::Started { 
+                            lookback_samples: lookback_sample_count 
+                        };
+                        
                         let _ = app_handle.emit("speech-started", SpeechEventPayload { 
                             duration_ms: None,
                             lookback_samples: Some(lookback_samples),
@@ -520,6 +554,12 @@ impl AudioProcessor for SpeechDetector {
                         // Perform lookback analysis to find true speech start
                         let (lookback_samples, lookback_offset_ms) = self.find_lookback_start();
                         self.last_lookback_offset_ms = Some(lookback_offset_ms);
+                        
+                        // Record state change for transcribe mode
+                        let lookback_sample_count = lookback_samples.len();
+                        self.last_state_change = SpeechStateChange::Started { 
+                            lookback_samples: lookback_sample_count 
+                        };
                         
                         let _ = app_handle.emit("speech-started", SpeechEventPayload { 
                             duration_ms: None,
@@ -561,6 +601,10 @@ impl AudioProcessor for SpeechDetector {
                     let duration_ms = self.samples_to_ms(self.speech_sample_count);
                     self.is_speaking = false;
                     self.speech_sample_count = 0;
+                    
+                    // Record state change for transcribe mode
+                    self.last_state_change = SpeechStateChange::Ended { duration_ms };
+                    
                     let _ = app_handle.emit("speech-ended", SpeechEventPayload { 
                         duration_ms: Some(duration_ms),
                         lookback_samples: None,

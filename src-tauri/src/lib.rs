@@ -2,6 +2,7 @@ mod audio;
 mod platform;
 mod processor;
 mod transcribe;
+mod transcribe_mode;
 #[cfg(not(target_os = "linux"))]
 mod whisper_ffi;
 
@@ -13,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter, State};
 use transcribe::Transcriber;
+use transcribe_mode::{TranscribeState, TranscriptionQueue};
 
 /// Detect if running on Wayland and set workaround env vars (Linux-specific)
 #[cfg(target_os = "linux")]
@@ -48,6 +50,10 @@ struct AppState {
     aec_enabled: Arc<Mutex<bool>>,
     /// Recording mode - determines how multiple sources are combined
     recording_mode: Arc<Mutex<RecordingMode>>,
+    /// Transcription queue for async processing
+    transcription_queue: Arc<TranscriptionQueue>,
+    /// Transcribe mode state
+    transcribe_state: Arc<Mutex<TranscribeState>>,
 }
 
 /// Convert platform device to frontend AudioDevice format
@@ -87,9 +93,12 @@ fn start_audio_processing_thread(
     recording: RecordingState,
     audio_backend: Arc<Mutex<Option<Box<dyn AudioBackend>>>>,
     processing_active: Arc<Mutex<bool>>,
+    transcribe_state: Arc<Mutex<TranscribeState>>,
     app_handle: AppHandle,
 ) {
     thread::spawn(move || {
+        use crate::processor::SpeechStateChange;
+        
         loop {
             // Check if we should stop
             if !*processing_active.lock().unwrap() {
@@ -113,6 +122,37 @@ fn start_audio_processing_thread(
                     audio_data.channels as usize,
                     &app_handle,
                 );
+                
+                // If transcribe mode is active, also process for transcription
+                // First check for speech state changes and handle them
+                let state_change = {
+                    let recording_state = recording.get_state();
+                    let audio_state = recording_state.lock().unwrap();
+                    if let Some(ref processor) = audio_state.speech_processor {
+                        processor.peek_state_change().clone()
+                    } else {
+                        SpeechStateChange::None
+                    }
+                };
+                
+                // Handle transcribe mode
+                if let Ok(mut transcribe) = transcribe_state.try_lock() {
+                    if transcribe.is_active {
+                        // Process samples into the ring buffer
+                        transcribe.process_samples(&audio_data.samples, &app_handle);
+                        
+                        // Handle speech state changes
+                        match state_change {
+                            SpeechStateChange::Started { lookback_samples } => {
+                                transcribe.on_speech_started(lookback_samples);
+                            }
+                            SpeechStateChange::Ended { duration_ms: _ } => {
+                                transcribe.on_speech_ended(&app_handle);
+                            }
+                            SpeechStateChange::None => {}
+                        }
+                    }
+                }
             } else {
                 // No data available, sleep briefly
                 thread::sleep(std::time::Duration::from_millis(1));
@@ -188,6 +228,7 @@ fn start_recording(
                 state.recording.clone(),
                 Arc::clone(&state.audio_backend),
                 Arc::clone(&state.processing_active),
+                Arc::clone(&state.transcribe_state),
                 app_handle,
             );
         }
@@ -371,6 +412,7 @@ fn start_monitor(
                 state.recording.clone(),
                 Arc::clone(&state.audio_backend),
                 Arc::clone(&state.processing_active),
+                Arc::clone(&state.transcribe_state),
                 app_handle,
             );
         }
@@ -465,6 +507,156 @@ struct ModelStatus {
     path: String,
 }
 
+/// Transcribe mode status for frontend
+#[derive(serde::Serialize)]
+struct TranscribeModeStatus {
+    active: bool,
+    in_speech: bool,
+    queue_depth: usize,
+}
+
+/// Start automatic transcription mode
+#[tauri::command]
+fn start_transcribe_mode(
+    source1_id: Option<String>,
+    source2_id: Option<String>,
+    state: State<AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    // Need at least one source
+    if source1_id.is_none() && source2_id.is_none() {
+        return Err("At least one audio source must be selected".to_string());
+    }
+
+    let has_backend = state.audio_backend.lock().unwrap().is_some();
+    
+    if has_backend {
+        // Check if processing thread is already running
+        let was_already_active = *state.processing_active.lock().unwrap();
+        
+        // Initialize recording state (needed for speech detection)
+        let sample_rate = {
+            let backend = state.audio_backend.lock().unwrap();
+            backend.as_ref().map(|b| b.sample_rate()).unwrap_or(48000)
+        };
+        
+        let source_type = match (source1_id.is_some(), source2_id.is_some()) {
+            (true, true) => AudioSourceType::Mixed,
+            _ => AudioSourceType::Input,
+        };
+        
+        state.recording.init_for_capture(sample_rate, 2, source_type);
+        
+        // Set monitoring flag and create visualization processor
+        {
+            let state_arc = state.recording.get_state();
+            let mut audio_state = state_arc.lock().unwrap();
+            audio_state.is_monitoring = true;
+            audio_state.visualization_processor = Some(
+                crate::processor::VisualizationProcessor::new(sample_rate, 256)
+            );
+        }
+        
+        // Initialize transcribe state
+        {
+            let mut transcribe = state.transcribe_state.lock().unwrap();
+            transcribe.init_for_capture(sample_rate, 2);
+            transcribe.activate();
+        }
+        
+        // Start transcription queue worker
+        {
+            let transcriber = state.transcriber.lock().unwrap();
+            let model_path = transcriber.get_model_path().clone();
+            drop(transcriber);
+            state.transcription_queue.start_worker(app_handle.clone(), model_path);
+        }
+        
+        // Start/restart capture with both sources
+        {
+            let backend = state.audio_backend.lock().unwrap();
+            if let Some(ref backend) = *backend {
+                backend.start_capture_sources(source1_id.clone(), source2_id.clone())?;
+            }
+        }
+        
+        // Only start processing thread if not already running
+        if !was_already_active {
+            *state.processing_active.lock().unwrap() = true;
+            start_audio_processing_thread(
+                state.recording.clone(),
+                Arc::clone(&state.audio_backend),
+                Arc::clone(&state.processing_active),
+                Arc::clone(&state.transcribe_state),
+                app_handle,
+            );
+        }
+        
+        println!("[TranscribeMode] Started");
+        Ok(())
+    } else {
+        Err("Audio backend not available".to_string())
+    }
+}
+
+/// Stop automatic transcription mode
+#[tauri::command]
+fn stop_transcribe_mode(state: State<AppState>, app_handle: AppHandle) -> Result<(), String> {
+    let has_backend = state.audio_backend.lock().unwrap().is_some();
+    
+    if has_backend {
+        // Finalize any pending segment
+        {
+            let mut transcribe = state.transcribe_state.lock().unwrap();
+            transcribe.finalize(&app_handle);
+            transcribe.deactivate();
+        }
+        
+        // Stop transcription queue worker (will drain remaining items)
+        state.transcription_queue.stop_worker();
+        
+        // Stop processing thread
+        *state.processing_active.lock().unwrap() = false;
+        
+        // Stop capture
+        if let Some(ref backend) = *state.audio_backend.lock().unwrap() {
+            backend.stop_capture()?;
+        }
+        
+        // Update audio state
+        {
+            let state_arc = state.recording.get_state();
+            let mut audio_state = state_arc.lock().unwrap();
+            audio_state.is_monitoring = false;
+            audio_state.visualization_processor = None;
+        }
+        state.recording.mark_capture_stopped();
+        
+        println!("[TranscribeMode] Stopped");
+        Ok(())
+    } else {
+        Err("Audio backend not available".to_string())
+    }
+}
+
+/// Check if transcribe mode is active
+#[tauri::command]
+fn is_transcribe_active(state: State<AppState>) -> bool {
+    let transcribe = state.transcribe_state.lock().unwrap();
+    transcribe.is_active
+}
+
+/// Get transcribe mode status
+#[tauri::command]
+fn get_transcribe_status(state: State<AppState>) -> TranscribeModeStatus {
+    let transcribe = state.transcribe_state.lock().unwrap();
+    TranscribeModeStatus {
+        active: transcribe.is_active,
+        in_speech: transcribe.in_speech,
+        queue_depth: state.transcription_queue.queue_depth(),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     configure_wayland_workarounds();
@@ -487,6 +679,12 @@ pub fn run() {
         }
     };
 
+    // Create transcription queue
+    let transcription_queue = Arc::new(TranscriptionQueue::new());
+    
+    // Create transcribe state
+    let transcribe_state = Arc::new(Mutex::new(TranscribeState::new(Arc::clone(&transcription_queue))));
+
     tauri::Builder::default()
         .manage(AppState {
             recording: RecordingState::new(),
@@ -495,6 +693,8 @@ pub fn run() {
             processing_active: Arc::new(Mutex::new(false)),
             aec_enabled,
             recording_mode,
+            transcription_queue,
+            transcribe_state,
         })
         .invoke_handler(tauri::generate_handler![
             list_all_sources,
@@ -511,6 +711,10 @@ pub fn run() {
             transcribe,
             check_model_status,
             download_model,
+            start_transcribe_mode,
+            stop_transcribe_mode,
+            is_transcribe_active,
+            get_transcribe_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

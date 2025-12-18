@@ -1101,10 +1101,10 @@ class SpeechActivityRenderer {
 // DOM elements
 let source1Select: HTMLSelectElement | null;
 let source2Select: HTMLSelectElement | null;
-let recordBtn: HTMLButtonElement | null;
 let monitorToggle: HTMLInputElement | null;
 let aecToggle: HTMLInputElement | null;
 let modeSelect: HTMLSelectElement | null;
+let transcribeToggle: HTMLInputElement | null;
 let statusEl: HTMLElement | null;
 let resultEl: HTMLElement | null;
 let modelWarning: HTMLElement | null;
@@ -1120,11 +1120,12 @@ let closeBtn: HTMLButtonElement | null;
 type RecordingMode = "Mixed" | "EchoCancel";
 
 // State
-let isRecording = false;
 let isMonitoring = false;
 let isAecEnabled = false;
 let recordingMode: RecordingMode = "Mixed";
-let wasMonitoringBeforeRecording = false;
+let isTranscribing = false;
+let inSpeechSegment = false;
+let transcribeQueueDepth = 0;
 let allDevices: AudioDevice[] = [];
 let waveformRenderer: WaveformRenderer | null = null;
 let spectrogramRenderer: SpectrogramRenderer | null = null;
@@ -1135,6 +1136,7 @@ let transcriptionErrorUnlisten: UnlistenFn | null = null;
 let speechStartedUnlisten: UnlistenFn | null = null;
 let speechEndedUnlisten: UnlistenFn | null = null;
 let recordingSavedUnlisten: UnlistenFn | null = null;
+let transcribeQueueUpdateUnlisten: UnlistenFn | null = null;
 
 async function loadDevices() {
   try {
@@ -1147,8 +1149,8 @@ async function loadDevices() {
     
     // Enable controls if we have at least one device
     const hasDevices = allDevices.length > 0;
-    if (recordBtn) {
-      recordBtn.disabled = !hasDevices;
+    if (transcribeToggle) {
+      transcribeToggle.disabled = !hasDevices;
     }
     if (monitorToggle) {
       monitorToggle.disabled = !hasDevices;
@@ -1241,26 +1243,25 @@ async function onSourceChange() {
   // Always update mode selector when sources change
   updateModeSelector();
   
-  if (!isMonitoring && !isRecording) {
+  if (!isMonitoring && !isTranscribing) {
     // Not active, nothing to do
     return;
   }
 
   if (!hasAnySourceSelected()) {
     // No sources selected - stop everything
-    if (isRecording) {
-      // Can't record with no sources - stop recording
-      setStatus("Recording stopped: no sources selected", "error");
+    if (isTranscribing) {
+      // Can't transcribe with no sources - stop transcribing
+      setStatus("Transcription stopped: no sources selected", "error");
       try {
-        await invoke("stop_recording", { keepMonitoring: false });
+        await invoke("stop_transcribe_mode");
       } catch (e) {
-        console.error("Error stopping recording:", e);
+        console.error("Error stopping transcribe mode:", e);
       }
-      isRecording = false;
+      isTranscribing = false;
       isMonitoring = false;
-      if (recordBtn) {
-        recordBtn.textContent = "Record";
-        recordBtn.classList.remove("recording");
+      if (transcribeToggle) {
+        transcribeToggle.checked = false;
       }
       if (monitorToggle) {
         monitorToggle.checked = false;
@@ -1299,13 +1300,14 @@ async function onSourceChange() {
   // Reconfigure with new sources
   const { source1Id, source2Id } = getSelectedSources();
 
-  if (isRecording) {
-    // Restart recording with new sources
+  if (isTranscribing) {
+    // Restart transcribe mode with new sources
     try {
-      await invoke("start_recording", { source1Id, source2Id });
+      await invoke("stop_transcribe_mode");
+      await invoke("start_transcribe_mode", { source1Id, source2Id });
       updateStatusForCurrentState();
     } catch (error) {
-      console.error("Error reconfiguring recording:", error);
+      console.error("Error reconfiguring transcribe mode:", error);
       setStatus(`Error: ${error}`, "error");
     }
   } else if (isMonitoring) {
@@ -1483,11 +1485,21 @@ async function setupSpeechEventListeners() {
 
   speechStartedUnlisten = await listen<SpeechEventPayload>("speech-started", (_event) => {
     console.log("[Speech] Started speaking");
+    // Track speech segment state for transcribe mode
+    if (isTranscribing) {
+      inSpeechSegment = true;
+      updateStatusForCurrentState();
+    }
   });
 
   speechEndedUnlisten = await listen<SpeechEventPayload>("speech-ended", (event) => {
     const duration = event.payload.duration_ms;
     console.log(`[Speech] Stopped speaking (duration: ${duration}ms)`);
+    // Track speech segment state for transcribe mode
+    if (isTranscribing) {
+      inSpeechSegment = false;
+      updateStatusForCurrentState();
+    }
   });
 }
 
@@ -1535,6 +1547,25 @@ function cleanupRecordingSavedListener() {
   }
 }
 
+async function setupTranscribeQueueListener() {
+  if (transcribeQueueUpdateUnlisten) return;
+
+  transcribeQueueUpdateUnlisten = await listen<number>("transcribe-queue-update", (event) => {
+    transcribeQueueDepth = event.payload;
+    // Update status to show queue depth if transcribing
+    if (isTranscribing) {
+      updateStatusForCurrentState();
+    }
+  });
+}
+
+function cleanupTranscribeQueueListener() {
+  if (transcribeQueueUpdateUnlisten) {
+    transcribeQueueUpdateUnlisten();
+    transcribeQueueUpdateUnlisten = null;
+  }
+}
+
 function cleanupTranscriptionListeners() {
   if (transcriptionCompleteUnlisten) {
     transcriptionCompleteUnlisten();
@@ -1570,8 +1601,8 @@ async function onModeChange() {
     recordingMode = newMode;
     console.log(`Recording mode set to: ${recordingMode}`);
     
-    // Update status if currently monitoring/recording
-    if (isMonitoring || isRecording) {
+    // Update status if currently monitoring/transcribing
+    if (isMonitoring || isTranscribing) {
       updateStatusForCurrentState();
     }
   } catch (error) {
@@ -1607,13 +1638,13 @@ function updateStatusForCurrentState() {
   const hasTwoSources = source1Id !== null && source2Id !== null;
   
   let statusText: string;
-  if (isRecording) {
-    if (hasTwoSources) {
-      statusText = recordingMode === "EchoCancel" 
-        ? "Recording (Voice Only)..." 
-        : "Recording (Mixed)...";
+  if (isTranscribing) {
+    if (inSpeechSegment) {
+      statusText = "Recording speech...";
+    } else if (transcribeQueueDepth > 0) {
+      statusText = `Listening... (${transcribeQueueDepth} pending)`;
     } else {
-      statusText = "Recording...";
+      statusText = "Listening...";
     }
   } else if (isMonitoring) {
     if (hasTwoSources) {
@@ -1688,48 +1719,45 @@ async function toggleMonitor() {
   }
 }
 
-async function toggleRecording() {
-  if (!recordBtn) return;
+async function toggleTranscribe() {
+  if (!transcribeToggle) return;
 
-  if (isRecording) {
-    // Stop recording
+  if (isTranscribing) {
+    // Stop transcribe mode
     try {
-      await invoke("stop_recording", { 
-        keepMonitoring: wasMonitoringBeforeRecording 
-      });
+      await invoke("stop_transcribe_mode");
       
-      isRecording = false;
-      recordBtn.textContent = "Record";
-      recordBtn.classList.remove("recording");
+      isTranscribing = false;
+      isMonitoring = false;
+      inSpeechSegment = false;
+      transcribeQueueDepth = 0;
+      transcribeToggle.checked = false;
       
       // Re-enable monitor toggle
       if (monitorToggle) {
         monitorToggle.disabled = false;
+        monitorToggle.checked = false;
       }
 
-      if (wasMonitoringBeforeRecording) {
-        setStatus("Transcribing... (monitoring continues)", "progress");
-      } else {
-        isMonitoring = false;
-        waveformRenderer?.stop();
-        waveformRenderer?.clear();
-        spectrogramRenderer?.stop();
-        spectrogramRenderer?.clear();
-        speechActivityRenderer?.stop();
-        speechActivityRenderer?.clear();
-        await cleanupVisualizationListener();
-        setStatus("Transcribing...", "progress");
-      }
-
-      wasMonitoringBeforeRecording = false;
+      waveformRenderer?.stop();
+      waveformRenderer?.clear();
+      spectrogramRenderer?.stop();
+      spectrogramRenderer?.clear();
+      speechActivityRenderer?.stop();
+      speechActivityRenderer?.clear();
+      await cleanupVisualizationListener();
+      setStatus("");
     } catch (error) {
-      console.error("Stop recording error:", error);
+      console.error("Stop transcribe mode error:", error);
       setStatus(`Error: ${error}`, "error");
-      isRecording = false;
-      recordBtn.textContent = "Record";
-      recordBtn.classList.remove("recording");
+      isTranscribing = false;
+      isMonitoring = false;
+      inSpeechSegment = false;
+      transcribeQueueDepth = 0;
+      transcribeToggle.checked = false;
       if (monitorToggle) {
         monitorToggle.disabled = false;
+        monitorToggle.checked = false;
       }
       waveformRenderer?.stop();
       waveformRenderer?.clear();
@@ -1738,42 +1766,37 @@ async function toggleRecording() {
       speechActivityRenderer?.stop();
       speechActivityRenderer?.clear();
       await cleanupVisualizationListener();
-      isMonitoring = false;
-      wasMonitoringBeforeRecording = false;
-      if (monitorToggle) {
-        monitorToggle.checked = false;
-      }
     }
   } else {
-    // Start recording
+    // Start transcribe mode
     if (!hasAnySourceSelected()) {
       setStatus("Please select at least one audio source", "error");
+      transcribeToggle.checked = false;
       return;
     }
 
     const { source1Id, source2Id } = getSelectedSources();
-    wasMonitoringBeforeRecording = isMonitoring;
 
     try {
       await setupVisualizationListener();
       await setupTranscriptionListeners();
+      await setupTranscribeQueueListener();
       
-      await invoke("start_recording", { 
+      await invoke("start_transcribe_mode", { 
         source1Id,
         source2Id,
       });
-      isRecording = true;
+      isTranscribing = true;
       isMonitoring = true;
-      recordBtn.textContent = "Stop";
-      recordBtn.classList.add("recording");
+      transcribeToggle.checked = true;
       
       updateStatusForCurrentState();
       
-      // Disable monitor toggle during recording (can't toggle it)
+      // Disable monitor toggle during transcribe mode (monitoring is implicit)
       if (monitorToggle) {
         monitorToggle.disabled = true;
+        monitorToggle.checked = true;
       }
-      // Source selects remain enabled so user can change sources on the fly
 
       if (!waveformRenderer?.active) {
         waveformRenderer?.clear();
@@ -1788,9 +1811,9 @@ async function toggleRecording() {
       }
       speechActivityRenderer?.start();
     } catch (error) {
-      console.error("Start recording error:", error);
+      console.error("Start transcribe mode error:", error);
       setStatus(`Error: ${error}`, "error");
-      wasMonitoringBeforeRecording = false;
+      transcribeToggle.checked = false;
       if (!isMonitoring) {
         await cleanupVisualizationListener();
       }
@@ -1801,10 +1824,10 @@ async function toggleRecording() {
 window.addEventListener("DOMContentLoaded", () => {
   source1Select = document.querySelector("#source1-select");
   source2Select = document.querySelector("#source2-select");
-  recordBtn = document.querySelector("#record-btn");
   monitorToggle = document.querySelector("#monitor-toggle");
   aecToggle = document.querySelector("#aec-toggle");
   modeSelect = document.querySelector("#mode-select");
+  transcribeToggle = document.querySelector("#transcribe-toggle");
   statusEl = document.querySelector("#status");
   resultEl = document.querySelector("#transcription-result");
   modelWarning = document.querySelector("#model-warning");
@@ -1860,10 +1883,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
   closeBtn = document.querySelector("#close-btn");
 
-  recordBtn?.addEventListener("click", toggleRecording);
   monitorToggle?.addEventListener("change", toggleMonitor);
   aecToggle?.addEventListener("change", toggleAec);
   modeSelect?.addEventListener("change", onModeChange);
+  transcribeToggle?.addEventListener("change", toggleTranscribe);
   downloadModelBtn?.addEventListener("click", downloadModel);
   source1Select?.addEventListener("change", onSourceChange);
   source2Select?.addEventListener("change", onSourceChange);
@@ -1880,6 +1903,7 @@ window.addEventListener("DOMContentLoaded", () => {
     cleanupTranscriptionListeners();
     cleanupSpeechEventListeners();
     cleanupRecordingSavedListener();
+    cleanupTranscribeQueueListener();
   });
 
   loadDevices();
