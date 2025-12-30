@@ -10,8 +10,10 @@ default-run = "flowstt"
 
 [features]
 default = []
-# Enable CUDA GPU acceleration for transcription (Linux only)
-# Requires NVIDIA CUDA Toolkit (nvcc, cuBLAS) installed at build time
+# Enable CUDA GPU acceleration for transcription
+# - Linux: Requires NVIDIA CUDA Toolkit (nvcc, cuBLAS) installed at build time
+# - Windows: Uses prebuilt CUDA binaries (no build-time dependencies, ~457MB download)
+# - macOS: No effect (uses Metal acceleration via prebuilt framework)
 cuda = ["whisper-rs/cuda"]
 
 [lib]

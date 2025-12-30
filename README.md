@@ -58,14 +58,14 @@ Download a model from [whisper.cpp models](https://huggingface.co/ggerganov/whis
 - Rust, Node.js, pnpm, CMake, C/C++ compiler
 - **Linux**: `libasound2-dev` (Debian/Ubuntu) or `alsa-lib` (Arch)
 
-### CUDA Acceleration (Linux only)
+### CUDA Acceleration (Linux & Windows)
 
-For GPU-accelerated transcription on Linux with NVIDIA GPUs, you can enable CUDA support:
+For GPU-accelerated transcription on NVIDIA GPUs, you can enable CUDA support:
 
 **Requirements:**
 - NVIDIA GPU with CUDA support
-- NVIDIA CUDA Toolkit (nvcc, cuBLAS) - typically version 11.x or 12.x
-- NVIDIA drivers with CUDA support
+- NVIDIA drivers with CUDA support (minimum driver version 525+ for CUDA 12.x)
+- **Linux only**: NVIDIA CUDA Toolkit (nvcc, cuBLAS) - typically version 11.x or 12.x
 
 **Build with CUDA:**
 ```bash
@@ -74,7 +74,20 @@ pnpm tauri build --features cuda
 pnpm tauri dev --features cuda
 ```
 
-**Troubleshooting CUDA builds:**
+**Platform differences:**
+
+| Platform | CUDA Support | Build Requirements | Binary Size |
+|----------|--------------|-------------------|-------------|
+| Windows x64 | Yes | None (uses prebuilt binaries) | ~457MB additional |
+| Linux | Yes | CUDA Toolkit required | ~20-50MB additional |
+| macOS | No effect | N/A (uses Metal via prebuilt framework) | - |
+
+**Windows notes:**
+- CUDA binaries are downloaded automatically during build (~457MB)
+- All required CUDA runtime DLLs are bundled with the application
+- End users do not need to install the CUDA Toolkit, only NVIDIA drivers
+
+**Linux troubleshooting:**
 - Ensure `nvcc` is in your PATH: `nvcc --version`
 - Install CUDA Toolkit: `sudo apt install nvidia-cuda-toolkit` (Debian/Ubuntu) or `sudo pacman -S cuda` (Arch)
 - If build fails with cuBLAS errors, ensure `libcublas` is installed

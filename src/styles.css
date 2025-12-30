@@ -120,7 +120,7 @@ img {
 .app-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   padding: 0.25rem 0.5rem;
   margin-top: 0;
   flex-shrink: 0;
@@ -140,7 +140,7 @@ img {
 }
 
 .app-version {
-  font-size: 1rem;
+  font-size: 0.65rem;
   color: #888;
   font-weight: 500;
 }
@@ -203,19 +203,44 @@ img {
   gap: 0.25rem;
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
-  background: rgba(118, 185, 0, 0.15);
-  border: 1px solid rgba(118, 185, 0, 0.4);
-  color: #76b900;
+  background: rgba(100, 100, 100, 0.15);
+  border: 1px solid rgba(100, 100, 100, 0.4);
+  color: #888;
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  position: relative;
+  cursor: help;
+  white-space: pre-line;
 }
 
-.cuda-icon {
-  width: 14px;
-  height: 14px;
+/* CUDA active state - GPU acceleration available */
+.cuda-indicator.active {
+  background: rgba(118, 185, 0, 0.15);
+  border-color: rgba(118, 185, 0, 0.4);
+  color: #76b900;
+}
+
+/* CUDA inactive state - built with CUDA but GPU not detected */
+.cuda-indicator.inactive {
+  background: rgba(255, 165, 0, 0.15);
+  border-color: rgba(255, 165, 0, 0.4);
+  color: #ffa500;
+}
+
+.cuda-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.cuda-indicator.active .cuda-dot {
+  background: #76b900;
+}
+
+.cuda-indicator.inactive .cuda-dot {
+  background: #ffa500;
 }
 
 .cuda-label {

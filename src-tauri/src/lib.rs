@@ -518,34 +518,73 @@ struct ModelStatus {
 struct CudaStatus {
     /// Whether the binary was built with CUDA support
     build_enabled: bool,
-    /// Whether CUDA is available at runtime (GPU detected)
+    /// Whether CUDA is available at runtime (detected from whisper.cpp system info)
     runtime_available: bool,
+    /// System info string from whisper.cpp (shows available backends)
+    system_info: String,
 }
 
 /// Check if the application was built with CUDA support
 #[tauri::command]
 fn get_cuda_status() -> CudaStatus {
     // Check build-time CUDA support
-    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    // Linux: uses whisper-rs with cuda feature
+    // Windows: uses prebuilt CUDA binaries when cuda feature is enabled
+    #[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "cuda"))]
     let build_enabled = true;
-    #[cfg(not(all(target_os = "linux", feature = "cuda")))]
+    #[cfg(not(all(any(target_os = "linux", target_os = "windows"), feature = "cuda")))]
     let build_enabled = false;
     
-    // Check runtime CUDA availability via whisper-rs system info
-    #[cfg(all(target_os = "linux", feature = "cuda"))]
-    let runtime_available = {
-        // whisper-rs exposes system info that indicates CUDA availability
-        // When CUDA is enabled and a GPU is available, whisper.cpp will use it
-        // We check if CUDA was compiled in - runtime detection would require 
-        // actually initializing the context
-        true // If built with CUDA, assume it's available (whisper-rs handles fallback)
+    // Get system info from whisper.cpp to detect GPU backend availability
+    // The system info string contains backend information like "CUDA : ARCHS = 520" when CUDA is available
+    #[cfg(not(target_os = "linux"))]
+    let (runtime_available, system_info) = {
+        // Initialize the library first if not already done
+        if let Err(e) = crate::whisper_ffi::init_library() {
+            eprintln!("Failed to init whisper library for system info: {}", e);
+            return CudaStatus {
+                build_enabled,
+                runtime_available: false,
+                system_info: format!("Library init error: {}", e),
+            };
+        }
+        
+        match crate::whisper_ffi::get_system_info() {
+            Ok(info) => {
+                // Check if a GPU backend is available in the system info
+                // CUDA format: "... CUDA : ARCHS = 520 ..." means CUDA backend is compiled in
+                // Also check for other GPU backends like METAL, VULKAN, etc.
+                let gpu_available = info.contains("CUDA : ARCHS") 
+                    || info.contains("METAL = 1")
+                    || info.contains("VULKAN = 1");
+                (gpu_available, info)
+            }
+            Err(e) => {
+                eprintln!("Failed to get whisper system info: {}", e);
+                (false, format!("Error: {}", e))
+            }
+        }
     };
-    #[cfg(not(all(target_os = "linux", feature = "cuda")))]
-    let runtime_available = false;
+    
+    // Linux uses whisper-rs, which doesn't expose system info the same way
+    #[cfg(target_os = "linux")]
+    let (runtime_available, system_info) = {
+        #[cfg(feature = "cuda")]
+        {
+            // When built with CUDA on Linux, assume it's available
+            // whisper-rs handles the actual GPU detection internally
+            (true, "Linux whisper-rs with CUDA".to_string())
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            (false, "Linux whisper-rs (CPU only)".to_string())
+        }
+    };
     
     CudaStatus {
         build_enabled,
         runtime_available,
+        system_info,
     }
 }
 

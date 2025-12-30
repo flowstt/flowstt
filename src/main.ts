@@ -15,6 +15,7 @@ interface ModelStatus {
 interface CudaStatus {
   build_enabled: boolean;
   runtime_available: boolean;
+  system_info: string;
 }
 
 interface SpeechEventPayload {
@@ -1598,15 +1599,20 @@ async function checkCudaStatus() {
     if (cudaIndicator) {
       if (status.build_enabled) {
         cudaIndicator.classList.remove("hidden");
-        cudaIndicator.title = status.runtime_available 
-          ? "CUDA GPU Acceleration (Available)"
-          : "CUDA GPU Acceleration (Built-in, checking runtime...)";
+        if (status.runtime_available) {
+          cudaIndicator.title = `CUDA GPU Acceleration Active\n${status.system_info}`;
+          cudaIndicator.classList.add("active");
+        } else {
+          cudaIndicator.title = `CUDA Built but NOT Active (GPU not detected)\n${status.system_info}`;
+          cudaIndicator.classList.add("inactive");
+        }
       } else {
         cudaIndicator.classList.add("hidden");
       }
     }
     
     console.log(`CUDA status: build_enabled=${status.build_enabled}, runtime_available=${status.runtime_available}`);
+    console.log(`Whisper system info: ${status.system_info}`);
   } catch (error) {
     console.error("Failed to check CUDA status:", error);
   }

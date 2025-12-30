@@ -56,6 +56,7 @@ pub struct WhisperLibrary {
     full_n_segments: unsafe extern "C" fn(ctx: WhisperContext) -> c_int,
     full_get_segment_text:
         unsafe extern "C" fn(ctx: WhisperContext, i_segment: c_int) -> *const c_char,
+    print_system_info: unsafe extern "C" fn() -> *const c_char,
 }
 
 // SAFETY: The library handle and function pointers don't contain thread-local data
@@ -102,6 +103,12 @@ impl WhisperLibrary {
                 )
                 .map_err(|e| format!("Failed to load whisper_full_get_segment_text: {}", e))?;
 
+            let print_system_info = *lib
+                .get::<unsafe extern "C" fn() -> *const c_char>(
+                    b"whisper_print_system_info\0",
+                )
+                .map_err(|e| format!("Failed to load whisper_print_system_info: {}", e))?;
+
             Ok(Self {
                 _lib: lib,
                 init_from_file,
@@ -110,6 +117,7 @@ impl WhisperLibrary {
                 full,
                 full_n_segments,
                 full_get_segment_text,
+                print_system_info,
             })
         }
     }
@@ -266,4 +274,19 @@ impl Drop for Context {
 pub fn full_default_params(strategy: WhisperSamplingStrategy) -> Result<WhisperFullParams, String> {
     let lib = get_lib()?;
     Ok(unsafe { (lib.full_default_params)(strategy as c_int) })
+}
+
+/// Get whisper.cpp system info string
+/// This includes information about available backends (CPU, CUDA, Metal, etc.)
+pub fn get_system_info() -> Result<String, String> {
+    let lib = get_lib()?;
+    let ptr = unsafe { (lib.print_system_info)() };
+    if ptr.is_null() {
+        return Err("Failed to get system info".to_string());
+    }
+    let c_str = unsafe { CStr::from_ptr(ptr) };
+    c_str
+        .to_str()
+        .map(|s| s.to_string())
+        .map_err(|e| format!("Invalid UTF-8 in system info: {}", e))
 }
