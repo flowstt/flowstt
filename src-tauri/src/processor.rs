@@ -23,6 +23,15 @@ pub struct SpeechEventPayload {
     pub lookback_offset_ms: Option<u32>,
 }
 
+/// Event payload for word break detection events
+#[derive(Clone, Serialize)]
+pub struct WordBreakPayload {
+    /// Timestamp offset in milliseconds from speech start
+    pub offset_ms: u32,
+    /// Duration of the detected gap in milliseconds
+    pub gap_duration_ms: u32,
+}
+
 /// Speech state change detected by the speech detector
 #[derive(Clone, Debug)]
 pub enum SpeechStateChange {
@@ -55,6 +64,8 @@ pub struct SpeechMetrics {
     pub is_lookback_speech: bool,
     /// Lookback offset in milliseconds (when speech was just confirmed)
     pub lookback_offset_ms: Option<u32>,
+    /// Whether a word break (inter-word gap) is currently detected
+    pub is_word_break: bool,
 }
 
 /// Configuration for a speech detection mode (voiced or whisper)
@@ -144,6 +155,28 @@ pub struct SpeechDetector {
     last_lookback_offset_ms: Option<u32>,
     /// Last state change detected during process() - for transcribe mode integration
     last_state_change: SpeechStateChange,
+    
+    // Word break detection fields
+    /// Word break threshold ratio (amplitude must drop below this fraction of recent average)
+    word_break_threshold_ratio: f32,
+    /// Minimum gap duration in samples for word break (15ms)
+    min_word_break_samples: u32,
+    /// Maximum gap duration in samples for word break (200ms)
+    max_word_break_samples: u32,
+    /// Window size in samples for tracking recent speech amplitude (100ms)
+    recent_speech_window_samples: u32,
+    /// Running sum of recent speech amplitude (linear, not dB)
+    recent_speech_amplitude_sum: f32,
+    /// Count of samples in recent speech amplitude window
+    recent_speech_amplitude_count: u32,
+    /// Whether we're currently in a word break gap
+    in_word_break: bool,
+    /// Sample count of current word break gap
+    word_break_sample_count: u32,
+    /// Sample count at start of current word break (for offset calculation)
+    word_break_start_speech_samples: u64,
+    /// Whether last frame was a word break (for metrics)
+    last_is_word_break: bool,
 }
 
 impl SpeechDetector {
@@ -208,6 +241,18 @@ impl SpeechDetector {
             lookback_threshold_db: -55.0, // More sensitive than detection thresholds
             last_lookback_offset_ms: None,
             last_state_change: SpeechStateChange::None,
+            
+            // Word break detection initialization
+            word_break_threshold_ratio: 0.5, // 50% of recent average
+            min_word_break_samples: (sample_rate as u64 * 15 / 1000) as u32, // 15ms
+            max_word_break_samples: (sample_rate as u64 * 200 / 1000) as u32, // 200ms
+            recent_speech_window_samples: (sample_rate as u64 * 100 / 1000) as u32, // 100ms
+            recent_speech_amplitude_sum: 0.0,
+            recent_speech_amplitude_count: 0,
+            in_word_break: false,
+            word_break_sample_count: 0,
+            word_break_start_speech_samples: 0,
+            last_is_word_break: false,
         }
     }
 
@@ -429,6 +474,7 @@ impl SpeechDetector {
             is_transient: self.last_is_transient,
             is_lookback_speech: false, // Will be set by visualization layer based on delay buffer
             lookback_offset_ms: self.last_lookback_offset_ms,
+            is_word_break: self.last_is_word_break,
         }
     }
 
@@ -441,6 +487,37 @@ impl SpeechDetector {
     /// Get the last speech state change without resetting it.
     pub fn peek_state_change(&self) -> &SpeechStateChange {
         &self.last_state_change
+    }
+    
+    /// Update the running average of speech amplitude (call only during confirmed speech)
+    fn update_speech_amplitude_average(&mut self, rms: f32, sample_count: u32) {
+        self.recent_speech_amplitude_sum += rms * sample_count as f32;
+        self.recent_speech_amplitude_count += sample_count;
+        
+        // If we've exceeded the window, scale down to approximate sliding window
+        if self.recent_speech_amplitude_count > self.recent_speech_window_samples {
+            let scale = self.recent_speech_window_samples as f32 / self.recent_speech_amplitude_count as f32;
+            self.recent_speech_amplitude_sum *= scale;
+            self.recent_speech_amplitude_count = self.recent_speech_window_samples;
+        }
+    }
+    
+    /// Get the recent average speech amplitude (linear)
+    fn get_recent_speech_amplitude(&self) -> f32 {
+        if self.recent_speech_amplitude_count == 0 {
+            return 0.0;
+        }
+        self.recent_speech_amplitude_sum / self.recent_speech_amplitude_count as f32
+    }
+    
+    /// Reset word break detection state (call when speech ends)
+    fn reset_word_break_state(&mut self) {
+        self.in_word_break = false;
+        self.word_break_sample_count = 0;
+        self.word_break_start_speech_samples = 0;
+        self.recent_speech_amplitude_sum = 0.0;
+        self.recent_speech_amplitude_count = 0;
+        self.last_is_word_break = false;
     }
 }
 
@@ -465,6 +542,8 @@ impl AudioProcessor for SpeechDetector {
         self.last_is_transient = self.is_transient(zcr, centroid);
         // Clear lookback offset by default (only set when speech is confirmed)
         self.last_lookback_offset_ms = None;
+        // Clear word break flag by default (set below if in a valid word break)
+        self.last_is_word_break = false;
 
         if !self.initialized {
             self.initialized = true;
@@ -497,6 +576,30 @@ impl AudioProcessor for SpeechDetector {
             if self.is_speaking {
                 // Continue confirmed speech
                 self.speech_sample_count += samples.len() as u64;
+                
+                // Update running average of speech amplitude for word break detection
+                self.update_speech_amplitude_average(rms, samples_len);
+                
+                // Check if we were in a word break that just ended
+                if self.in_word_break {
+                    // Word break ended - check if it was valid (within duration bounds)
+                    if self.word_break_sample_count >= self.min_word_break_samples 
+                        && self.word_break_sample_count <= self.max_word_break_samples 
+                    {
+                        // Valid word break detected - emit event
+                        let gap_duration_ms = self.samples_to_ms(self.word_break_sample_count as u64) as u32;
+                        let offset_ms = self.samples_to_ms(self.word_break_start_speech_samples) as u32;
+                        
+                        let _ = app_handle.emit("word-break", WordBreakPayload {
+                            offset_ms,
+                            gap_duration_ms,
+                        });
+                        println!("[SpeechDetector] Word break detected (offset: {}ms, gap: {}ms)", offset_ms, gap_duration_ms);
+                    }
+                    // Reset word break tracking
+                    self.in_word_break = false;
+                    self.word_break_sample_count = 0;
+                }
             } else {
                 // Handle onset accumulation based on which mode matches
                 if is_voiced {
@@ -594,6 +697,30 @@ impl AudioProcessor for SpeechDetector {
             
             if self.is_speaking {
                 self.silence_sample_count += samples_len;
+                
+                // Word break detection: check if amplitude dropped below threshold
+                let recent_avg = self.get_recent_speech_amplitude();
+                let threshold = recent_avg * self.word_break_threshold_ratio;
+                
+                if recent_avg > 0.0 && rms < threshold {
+                    // Amplitude is below word break threshold
+                    if !self.in_word_break {
+                        // Start tracking a potential word break
+                        self.in_word_break = true;
+                        self.word_break_sample_count = samples_len;
+                        self.word_break_start_speech_samples = self.speech_sample_count;
+                    } else {
+                        // Continue tracking word break
+                        self.word_break_sample_count += samples_len;
+                    }
+                    
+                    // Mark as word break if within valid duration range
+                    if self.word_break_sample_count >= self.min_word_break_samples
+                        && self.word_break_sample_count <= self.max_word_break_samples
+                    {
+                        self.last_is_word_break = true;
+                    }
+                }
 
                 // Check if hold time has elapsed
                 if self.silence_sample_count >= self.hold_samples {
@@ -601,6 +728,9 @@ impl AudioProcessor for SpeechDetector {
                     let duration_ms = self.samples_to_ms(self.speech_sample_count);
                     self.is_speaking = false;
                     self.speech_sample_count = 0;
+                    
+                    // Reset word break state when speech ends
+                    self.reset_word_break_state();
                     
                     // Record state change for transcribe mode
                     self.last_state_change = SpeechStateChange::Ended { duration_ms };

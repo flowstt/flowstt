@@ -17,6 +17,7 @@ export interface SpeechMetrics {
   is_transient: boolean;     // Whether current frame is classified as transient
   is_lookback_speech: boolean; // Whether this is lookback-determined speech
   lookback_offset_ms: number | null; // Lookback offset when speech just confirmed
+  is_word_break: boolean;    // Whether a word break (inter-word gap) is detected
 }
 
 export interface VisualizationPayload {
@@ -622,6 +623,7 @@ interface BufferedMetric {
   whisperPending: boolean;
   transient: boolean;
   isLookbackSpeech: boolean;
+  isWordBreak: boolean;
 }
 
 // Speech Activity renderer - visualizes speech detection algorithm components
@@ -641,6 +643,7 @@ export class SpeechActivityRenderer {
   private voicedPendingBuffer: Uint8Array;
   private whisperPendingBuffer: Uint8Array;
   private transientBuffer: Uint8Array;
+  private wordBreakBuffer: Uint8Array; // 0 or 1 - word break detected
   
   private bufferSize: number;
   private writeIndex: number = 0;
@@ -685,6 +688,7 @@ export class SpeechActivityRenderer {
     this.voicedPendingBuffer = new Uint8Array(bufferSize);
     this.whisperPendingBuffer = new Uint8Array(bufferSize);
     this.transientBuffer = new Uint8Array(bufferSize);
+    this.wordBreakBuffer = new Uint8Array(bufferSize);
     
     this.setupCanvas();
   }
@@ -719,6 +723,7 @@ export class SpeechActivityRenderer {
       whisperPending: metrics.is_whisper_pending,
       transient: metrics.is_transient,
       isLookbackSpeech: false,
+      isWordBreak: metrics.is_word_break,
     };
     
     // Add to delay buffer
@@ -759,6 +764,7 @@ export class SpeechActivityRenderer {
     this.voicedPendingBuffer[this.writeIndex] = metric.voicedPending ? 1 : 0;
     this.whisperPendingBuffer[this.writeIndex] = metric.whisperPending ? 1 : 0;
     this.transientBuffer[this.writeIndex] = metric.transient ? 1 : 0;
+    this.wordBreakBuffer[this.writeIndex] = metric.isWordBreak ? 1 : 0;
     
     this.writeIndex = (this.writeIndex + 1) % this.bufferSize;
     if (this.writeIndex === 0) {
@@ -793,6 +799,7 @@ export class SpeechActivityRenderer {
     this.voicedPendingBuffer.fill(0);
     this.whisperPendingBuffer.fill(0);
     this.transientBuffer.fill(0);
+    this.wordBreakBuffer.fill(0);
     this.delayBuffer = [];
     this.writeIndex = 0;
     this.filled = false;
@@ -863,6 +870,10 @@ export class SpeechActivityRenderer {
     // Now includes lookback speech in a different color
     this.drawSpeechBar(speaking, lookbackSpeech, area);
 
+    // Draw word break bars overlaying the speech bar
+    const wordBreaks = this.getSamplesInOrder(this.wordBreakBuffer);
+    this.drawWordBreakBars(wordBreaks, speaking, area);
+
     // Draw metric lines
     // Amplitude (gold/yellow)
     this.drawMetricLine(amplitudes, area, "rgba(245, 158, 11, 0.75)", 1);
@@ -925,6 +936,37 @@ export class SpeechActivityRenderer {
       } else if (!isConfirmedSpeech && inSpeech) {
         inSpeech = false;
         this.ctx.fillRect(speechStartX, area.y, x - speechStartX, barHeight);
+      }
+    }
+  }
+
+  private drawWordBreakBars(
+    wordBreaks: Uint8Array,
+    speaking: Uint8Array,
+    area: { x: number; y: number; width: number; height: number }
+  ): void {
+    if (wordBreaks.length === 0) return;
+
+    const barHeight = area.height * 0.15; // Same height as speech bar
+    const offset = this.bufferSize - wordBreaks.length;
+
+    // Draw vertical bars at word break positions (only within speech regions)
+    this.ctx.strokeStyle = "rgba(249, 115, 22, 0.85)"; // Orange (matches Tailwind orange-500)
+    this.ctx.lineWidth = 2;
+
+    for (let i = 0; i < wordBreaks.length; i++) {
+      // Only draw if it's a word break AND we're in a speaking region
+      const isWordBreak = wordBreaks[i] === 1;
+      const isSpeaking = i < speaking.length && speaking[i] === 1;
+      
+      if (isWordBreak && isSpeaking) {
+        const x = area.x + ((offset + i) / this.bufferSize) * area.width;
+        
+        // Draw vertical line spanning the speech bar height
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, area.y);
+        this.ctx.lineTo(x, area.y + barHeight);
+        this.ctx.stroke();
       }
     }
   }

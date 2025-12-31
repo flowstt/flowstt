@@ -194,7 +194,7 @@ The system SHALL display a real-time speech activity visualization below the wav
 - **THEN** the waveform and spectrogram display with minimal latency while the speech activity graph is intentionally delayed
 
 ### Requirement: Speech Detection Metrics Visualization
-The system SHALL display individual speech detection algorithm components as colored line graphs within the speech activity display.
+The system SHALL display individual speech detection algorithm components as colored line graphs within the speech activity display, including word break indicators.
 
 #### Scenario: Amplitude line displayed
 - **WHEN** speech detection metrics are received
@@ -215,6 +215,10 @@ The system SHALL display individual speech detection algorithm components as col
 #### Scenario: Transient detection indicator displayed
 - **WHEN** a transient sound is detected (keyboard click, etc.)
 - **THEN** the transient state is indicated with a red marker
+
+#### Scenario: Word break markers displayed
+- **WHEN** speech detection metrics indicate a word break
+- **THEN** a vertical bar is drawn at that position within the speech state bar region
 
 ### Requirement: Speech Detection State Bar
 The system SHALL display the current speech detection state as a filled bar indicator that allows underlying metric lines to remain visible.
@@ -448,4 +452,27 @@ The visualization window SHALL display a close button to allow the user to close
 #### Scenario: Close button style matches main window
 - **WHEN** the visualization window renders
 - **THEN** the close button has the same appearance as the main window close button
+
+### Requirement: Word Break Visualization
+The system SHALL display detected word breaks as vertical bar markers overlaying the speech state bar area in the speech activity graph.
+
+#### Scenario: Word break bar rendered
+- **WHEN** the speech activity graph renders metrics with `is_word_break: true`
+- **THEN** a vertical bar is drawn spanning the full height of the speech state bar region at that time position
+
+#### Scenario: Word break bar styling
+- **WHEN** word break bars are rendered
+- **THEN** they use a semi-transparent white or light gray color (e.g., rgba(255, 255, 255, 0.6)) to contrast with the green/blue speech bars
+
+#### Scenario: Word break bar width
+- **WHEN** word break bars are rendered
+- **THEN** they are 1-2 pixels wide to appear as distinct vertical lines
+
+#### Scenario: Multiple word breaks visible
+- **WHEN** the speech activity graph scrolls and multiple word breaks are within the visible window
+- **THEN** all word break bars are rendered at their correct temporal positions
+
+#### Scenario: Word breaks only in speech regions
+- **WHEN** word break markers are rendered
+- **THEN** they only appear within regions where speech is active (green or blue speech bar areas)
 
