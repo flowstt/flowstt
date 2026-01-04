@@ -1,8 +1,5 @@
-# speech-transcription Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-whisper-stt-scaffolding. Update Purpose after archive.
-## Requirements
 ### Requirement: Local Whisper Transcription
 The system SHALL transcribe recorded audio to text using a local Whisper model. On all platforms (Windows, macOS, and Linux), transcription uses the whisper.cpp shared library loaded via FFI. In transcribe mode, segments are processed asynchronously from a queue.
 
@@ -29,28 +26,6 @@ The system SHALL transcribe recorded audio to text using a local Whisper model. 
 #### Scenario: Queue-based transcription in transcribe mode
 - **WHEN** transcribe mode is active and a speech segment is queued
 - **THEN** the transcription worker processes the segment from the queue and emits the result
-
-### Requirement: Model Loading
-The system SHALL load the Whisper model from a known filesystem location.
-
-#### Scenario: Model found
-- **WHEN** the model file exists at the expected path
-- **THEN** the model loads successfully and transcription is available
-
-#### Scenario: Model not found
-- **WHEN** the model file does not exist at the expected path
-- **THEN** the system displays an error message with instructions for obtaining the model
-
-### Requirement: Transcription Result Display
-The system SHALL display transcription results in a dedicated text area.
-
-#### Scenario: Display transcribed text
-- **WHEN** transcription completes successfully
-- **THEN** the transcribed text appears in the result area
-
-#### Scenario: Empty transcription
-- **WHEN** transcription completes but no speech was detected
-- **THEN** the result area indicates no speech was detected
 
 ### Requirement: Whisper Library Bundling
 The system SHALL bundle the whisper.cpp shared library with the application on all platforms. On Windows and macOS, the library SHALL be downloaded from the official whisper.cpp GitHub releases during the build process. On Linux, the library SHALL be built from source during the build process using CMake.
@@ -102,44 +77,6 @@ The build system SHALL select the correct whisper.cpp binary or build configurat
 - **WHEN** building for Linux x86_64
 - **THEN** the build system compiles whisper.cpp from source with CMake and produces libwhisper.so
 
-### Requirement: Transcription Queue
-The system SHALL maintain a queue of audio segments awaiting transcription. The queue allows recording to continue while transcription processes previous segments asynchronously.
-
-#### Scenario: Segment queued for transcription
-- **WHEN** a speech segment is finalized in transcribe mode
-- **THEN** the segment is added to the transcription queue
-
-#### Scenario: Queue processes segments sequentially
-- **WHEN** multiple segments are in the transcription queue
-- **THEN** segments are processed in FIFO order (oldest first)
-
-#### Scenario: Queue bounded to prevent memory growth
-- **WHEN** the transcription queue reaches its maximum capacity (10 segments)
-- **THEN** new segments wait until space is available (recording continues, queue blocks)
-
-#### Scenario: Queue drains on transcribe mode stop
-- **WHEN** the user disables transcribe mode
-- **THEN** remaining queued segments continue to be transcribed until the queue is empty
-
-### Requirement: Async Transcription Worker
-The system SHALL run a dedicated worker thread that processes queued transcription segments independently of the recording and monitoring pipeline.
-
-#### Scenario: Worker processes queue
-- **WHEN** segments are present in the transcription queue
-- **THEN** the worker retrieves and transcribes segments one at a time
-
-#### Scenario: Worker emits results
-- **WHEN** the worker completes transcription of a segment
-- **THEN** a transcription-complete event is emitted with the transcribed text
-
-#### Scenario: Worker handles empty segments
-- **WHEN** a queued segment contains no detectable speech
-- **THEN** the worker emits "(No speech detected)" as the transcription result
-
-#### Scenario: Worker tolerates transcription lag
-- **WHEN** speech segments are produced faster than transcription can process them
-- **THEN** the worker continues processing at its own pace while segments accumulate in the queue
-
 ### Requirement: CUDA GPU Acceleration (Linux)
 On Linux, the system SHALL support optional CUDA GPU acceleration for voice transcription when built with the `cuda` feature flag. When enabled, the build system configures CMake to enable CUDA support, and transcription uses NVIDIA GPU hardware for faster inference.
 
@@ -165,27 +102,3 @@ On Linux, the system SHALL support optional CUDA GPU acceleration for voice tran
 - **WHEN** building on Linux with `--features cuda`
 - **AND** the NVIDIA CUDA Toolkit is not installed
 - **THEN** the build fails with a clear error message directing the user to install the CUDA Toolkit
-
-### Requirement: CUDA GPU Acceleration (Windows)
-On Windows, the system SHALL support optional CUDA GPU acceleration for voice transcription when built with the `cuda` feature flag. When enabled, the build system downloads CUDA-enabled whisper.cpp binaries and bundles the necessary CUDA runtime DLLs with the application.
-
-#### Scenario: CUDA-enabled build on Windows
-- **WHEN** the application is built on Windows with `--features cuda`
-- **THEN** the build system downloads the CUDA-enabled whisper.cpp binary (`whisper-cublas-12.4.0-bin-x64.zip`)
-- **AND** all required CUDA runtime DLLs are bundled with the application
-- **AND** transcription uses the NVIDIA GPU when a compatible GPU and drivers are present
-
-#### Scenario: Default CPU-only build on Windows
-- **WHEN** the application is built on Windows without the `cuda` feature flag
-- **THEN** the build system downloads the CPU-only whisper.cpp binary (existing behavior)
-
-#### Scenario: CUDA runtime bundled with application
-- **WHEN** the application is built with CUDA support on Windows
-- **THEN** the CUDA runtime DLLs (cublas64_12.dll, cublasLt64_12.dll, cudart64_12.dll) are included in the application bundle
-- **AND** end users do not need to install the CUDA Toolkit
-
-#### Scenario: CUDA build without GPU at runtime
-- **WHEN** the application is built with CUDA support on Windows
-- **AND** no compatible NVIDIA GPU is available at runtime
-- **THEN** transcription fails with an error indicating GPU is unavailable
-

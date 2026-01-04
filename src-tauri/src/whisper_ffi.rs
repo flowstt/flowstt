@@ -1,5 +1,9 @@
-//! FFI bindings to whisper.cpp for Windows and macOS.
+//! FFI bindings to whisper.cpp for all platforms.
 //! This module uses libloading to dynamically load the whisper shared library at runtime.
+//! 
+//! On Windows: whisper.dll is downloaded from GitHub releases
+//! On macOS: libwhisper.dylib is downloaded from GitHub releases  
+//! On Linux: libwhisper.so is built from source using CMake
 
 use libloading::Library;
 use std::ffi::{c_char, c_float, c_int, CStr, CString};
@@ -272,8 +276,10 @@ pub fn init_library() -> Result<(), String> {
         // Try to find the library in various locations
         let lib_name = if cfg!(windows) {
             "whisper.dll"
-        } else {
+        } else if cfg!(target_os = "macos") {
             "libwhisper.dylib"
+        } else {
+            "libwhisper.so"
         };
 
         // Search paths in order of preference:

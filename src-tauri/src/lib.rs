@@ -3,7 +3,6 @@ mod platform;
 mod processor;
 mod transcribe;
 mod transcribe_mode;
-#[cfg(not(target_os = "linux"))]
 mod whisper_ffi;
 
 use audio::{AudioDevice, AudioSourceType, RecordingMode, RecordingState, generate_recording_filename, save_to_wav};
@@ -535,8 +534,7 @@ struct CudaStatus {
 #[tauri::command]
 fn get_cuda_status() -> CudaStatus {
     // Check build-time CUDA support
-    // Linux: uses whisper-rs with cuda feature
-    // Windows: uses prebuilt CUDA binaries when cuda feature is enabled
+    // All platforms: cuda feature flag indicates CUDA support was requested at build time
     #[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "cuda"))]
     let build_enabled = true;
     #[cfg(not(all(any(target_os = "linux", target_os = "windows"), feature = "cuda")))]
@@ -544,7 +542,7 @@ fn get_cuda_status() -> CudaStatus {
     
     // Get system info from whisper.cpp to detect GPU backend availability
     // The system info string contains backend information like "CUDA : ARCHS = 520" when CUDA is available
-    #[cfg(not(target_os = "linux"))]
+    // All platforms now use FFI with whisper.cpp
     let (runtime_available, system_info) = {
         // Initialize the library first if not already done
         if let Err(e) = crate::whisper_ffi::init_library() {
@@ -570,21 +568,6 @@ fn get_cuda_status() -> CudaStatus {
                 eprintln!("Failed to get whisper system info: {}", e);
                 (false, format!("Error: {}", e))
             }
-        }
-    };
-    
-    // Linux uses whisper-rs, which doesn't expose system info the same way
-    #[cfg(target_os = "linux")]
-    let (runtime_available, system_info) = {
-        #[cfg(feature = "cuda")]
-        {
-            // When built with CUDA on Linux, assume it's available
-            // whisper-rs handles the actual GPU detection internally
-            (true, "Linux whisper-rs with CUDA".to_string())
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            (false, "Linux whisper-rs (CPU only)".to_string())
         }
     };
     
