@@ -48,6 +48,39 @@ Traditional voice assistants feel robotic. FlowSTT treats conversation as a cont
 
 Download the latest release from the releases page.
 
+### Command Line Interface
+
+FlowSTT includes a powerful CLI for headless operation and scripting:
+
+```bash
+# List available audio devices
+flowstt list
+
+# Start transcription with default microphone
+flowstt transcribe --source1 <device-id>
+
+# Start transcription with two sources and echo cancellation
+flowstt transcribe --source1 <mic-id> --source2 <system-id> --aec
+
+# Check transcription status
+flowstt status
+
+# Stop transcription
+flowstt stop
+
+# Check GPU/CUDA status
+flowstt gpu
+
+# Download the Whisper model
+flowstt model download
+
+# Get JSON output for scripting
+flowstt list --format json
+flowstt status --format json
+```
+
+The CLI automatically starts the background service if not already running.
+
 ## Prerequisites
 
 ### Whisper Model
@@ -103,6 +136,31 @@ pnpm install
 pnpm tauri dev      # development (CPU-only)
 pnpm tauri build    # production (CPU-only)
 ```
+
+### Building Individual Components
+
+```bash
+# Build the CLI only
+cargo build -p flowstt-cli --release
+
+# Build the background service only
+cargo build -p flowstt-service --release
+
+# Build the GUI application only
+pnpm tauri build
+```
+
+### Architecture
+
+FlowSTT consists of three main components:
+
+| Component | Binary | Description |
+|-----------|--------|-------------|
+| **CLI** | `flowstt` | Command-line interface for scripting and headless operation |
+| **Service** | `flowstt-service` | Background daemon handling audio capture and transcription |
+| **GUI** | `flowstt-app` | Desktop application with visualization |
+
+The CLI and GUI communicate with the service via IPC (Unix sockets on Linux/macOS, named pipes on Windows).
 
 ## Tech Stack
 

@@ -1,0 +1,150 @@
+//! IPC client for communicating with the FlowSTT service.
+
+use flowstt_common::ipc::{get_socket_path, read_json, write_json, IpcError, Request, Response};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::time::Duration;
+
+/// IPC client for communicating with the FlowSTT service.
+pub struct Client {
+    #[cfg(unix)]
+    stream: Option<tokio::net::UnixStream>,
+    #[cfg(windows)]
+    stream: Option<tokio::net::windows::named_pipe::NamedPipeClient>,
+}
+
+impl Client {
+    /// Create a new client (not connected).
+    pub fn new() -> Self {
+        Self { stream: None }
+    }
+
+    /// Connect to the service.
+    pub async fn connect(&mut self) -> Result<(), IpcError> {
+        let socket_path = get_socket_path();
+
+        #[cfg(unix)]
+        {
+            let stream = tokio::net::UnixStream::connect(&socket_path)
+                .await
+                .map_err(IpcError::Io)?;
+            self.stream = Some(stream);
+        }
+
+        #[cfg(windows)]
+        {
+            use tokio::net::windows::named_pipe::ClientOptions;
+            let stream = ClientOptions::new()
+                .open(&socket_path)
+                .map_err(IpcError::Io)?;
+            self.stream = Some(stream);
+        }
+
+        Ok(())
+    }
+
+    /// Check if the service is running.
+    pub async fn is_service_running() -> bool {
+        let socket_path = get_socket_path();
+        socket_path.exists()
+    }
+
+    /// Try to connect, spawning the service if needed.
+    pub async fn connect_or_spawn(&mut self) -> Result<(), IpcError> {
+        // First try to connect
+        if self.connect().await.is_ok() {
+            return Ok(());
+        }
+
+        // Service not running, try to spawn it
+        eprintln!("Service not running, starting...");
+        spawn_service()?;
+
+        // Wait for service to be ready (up to 5 seconds)
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if self.connect().await.is_ok() {
+                return Ok(());
+            }
+        }
+
+        Err(IpcError::ParseError(
+            "Service failed to start within timeout".into(),
+        ))
+    }
+
+    /// Send a request and receive a response.
+    pub async fn request(&mut self, request: Request) -> Result<Response, IpcError> {
+        #[cfg(unix)]
+        {
+            let stream = self
+                .stream
+                .as_mut()
+                .ok_or_else(|| IpcError::ParseError("Not connected".into()))?;
+            let (mut reader, mut writer) = stream.split();
+            write_json(&mut writer, &request).await?;
+            read_json(&mut reader).await
+        }
+
+        #[cfg(windows)]
+        {
+            let stream = self
+                .stream
+                .as_mut()
+                .ok_or_else(|| IpcError::ParseError("Not connected".into()))?;
+            let (mut reader, mut writer) = tokio::io::split(stream);
+            write_json(&mut writer, &request).await?;
+            read_json(&mut reader).await
+        }
+    }
+
+    /// Ping the service.
+    pub async fn ping(&mut self) -> Result<bool, IpcError> {
+        match self.request(Request::Ping).await? {
+            Response::Pong => Ok(true),
+            Response::Error { message } => Err(IpcError::ParseError(message)),
+            _ => Err(IpcError::ParseError("Unexpected response".into())),
+        }
+    }
+}
+
+/// Get the path to the service executable.
+fn get_service_path() -> PathBuf {
+    // Try to find the service binary next to the CLI binary
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(dir) = exe_path.parent() {
+            let service_path = dir.join(if cfg!(windows) {
+                "flowstt-service.exe"
+            } else {
+                "flowstt-service"
+            });
+            if service_path.exists() {
+                return service_path;
+            }
+        }
+    }
+
+    // Fall back to PATH
+    PathBuf::from(if cfg!(windows) {
+        "flowstt-service.exe"
+    } else {
+        "flowstt-service"
+    })
+}
+
+/// Spawn the service process.
+fn spawn_service() -> Result<Child, IpcError> {
+    let service_path = get_service_path();
+
+    Command::new(&service_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            IpcError::ParseError(format!(
+                "Failed to spawn service at {:?}: {}",
+                service_path, e
+            ))
+        })
+}

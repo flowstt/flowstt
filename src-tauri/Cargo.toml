@@ -1,21 +1,13 @@
 [package]
-name = "flowstt"
+name = "flowstt-app"
 version = "0.1.0"
-description = "FlowSTT - Speech to Text"
+description = "FlowSTT - Speech to Text GUI"
 authors = ["you"]
 edition = "2021"
-default-run = "flowstt"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[features]
-default = []
-# Enable CUDA GPU acceleration for transcription
-# - Linux: Requires NVIDIA CUDA Toolkit (nvcc, cuBLAS) installed at build time
-#          whisper.cpp is built from source with -DGGML_CUDA=ON
-# - Windows: Uses prebuilt CUDA binaries (no build-time dependencies, ~457MB download)
-# - macOS: No effect (uses Metal acceleration via prebuilt framework)
-cuda = []
+# No features needed - all audio/transcription is handled by the service
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -26,53 +18,17 @@ crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-reqwest = { version = "0.12", features = ["blocking"] }
-zip = "2"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
-reqwest = { version = "0.12", features = ["blocking"] }
-rustfft = "6.2"
-hound = "3.5"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "io-util", "net"] }
 
-# All platforms: Use libloading for FFI with whisper.cpp shared library
-libloading = "0.8"
+# Shared types and IPC protocol
+flowstt-common = { path = "../src-common" }
 
-# Cross-platform dependencies for audio processing (including macOS for multi-source capture)
-[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
-aec3 = "0.1"  # Pure Rust port of WebRTC AEC3, supports 48kHz
-
-# Linux-specific dependencies
-[target.'cfg(target_os = "linux")'.dependencies]
-pipewire = "0.8"
-
-# Windows-specific dependencies
+# Windows-specific dependencies for named pipes
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
-    "Win32_Foundation",
-    "Win32_Media_Audio",
-    "Win32_Media_KernelStreaming",
-    "Win32_Media_Multimedia",
-    "Win32_System_Com",
-    "Win32_System_Threading",
-    "Win32_Security",
-    "Win32_Devices_FunctionDiscovery",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_UI_Shell_PropertiesSystem",
-] }
-
-# macOS-specific dependencies
-[target.'cfg(target_os = "macos")'.dependencies]
-coreaudio-rs = "0.11"
-# ScreenCaptureKit bindings for system audio capture
-screencapturekit-sys = "0.2"
-core-foundation = "0.10"
-# Objective-C bindings for additional macOS functionality
-objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSString", "NSArray", "NSError", "dispatch", "block2", "NSGeometry", "NSValue", "NSUUID"] }
-objc2-app-kit = { version = "0.2", features = ["NSRunningApplication"] }
-block2 = "0.5"
-dispatch = "0.2"
+tokio = { version = "1", features = ["net"] }

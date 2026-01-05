@@ -1,0 +1,117 @@
+[package]
+name = "flowstt-service"
+version = "0.1.0"
+edition = "2021"
+description = "Background service for FlowSTT voice transcription"
+
+[[bin]]
+name = "flowstt-service"
+path = "src/main.rs"
+
+[features]
+default = []
+# Enable CUDA GPU acceleration for transcription
+# - Linux: Requires NVIDIA CUDA Toolkit (nvcc, cuBLAS) installed at build time
+#          whisper.cpp is built from source with -DGGML_CUDA=ON
+# - Windows: Uses prebuilt CUDA binaries (no build-time dependencies, ~457MB download)
+# - macOS: No effect (uses Metal acceleration via prebuilt framework)
+cuda = []
+
+[build-dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
+zip = "2"
+
+[dependencies]
+# Shared types and IPC protocol
+flowstt-common = { path = "../src-common" }
+
+# Dynamic library loading for whisper.cpp FFI
+libloading = "0.8"
+
+# HTTP client for model downloading
+reqwest = { version = "0.12", features = ["blocking"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# File paths
+directories = "5"
+
+# Date/time for filenames
+chrono = "0.4"
+
+# Audio file handling
+hound = "3.5"
+
+# FFT for spectrogram
+rustfft = "6.2"
+
+# =============================================================================
+# Platform-specific dependencies
+# =============================================================================
+
+# Unix-specific dependencies
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows-specific dependencies
+[target.'cfg(windows)'.dependencies]
+# Ctrl+C handler for graceful shutdown
+ctrlc = "3"
+
+# Acoustic Echo Cancellation
+aec3 = "0.1"
+
+# Windows APIs
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+# Linux-specific dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+# Acoustic Echo Cancellation
+aec3 = "0.1"
+
+# PipeWire for audio capture
+pipewire = "0.8"
+
+# macOS-specific dependencies
+[target.'cfg(target_os = "macos")'.dependencies]
+# CoreAudio for audio device enumeration and input capture
+coreaudio-rs = "0.11"
+
+# ScreenCaptureKit bindings for system audio capture
+screencapturekit-sys = "0.2"
+
+# Core Foundation for macOS system types
+core-foundation = "0.10"
+
+# Objective-C bindings for additional macOS functionality
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSArray", "NSError", "dispatch", "block2", "NSGeometry", "NSValue", "NSUUID"] }
+objc2-app-kit = { version = "0.2", features = ["NSRunningApplication"] }
+block2 = "0.5"
+dispatch = "0.2"
+
+# Acoustic Echo Cancellation
+aec3 = "0.1"
+
+libc = "0.2"

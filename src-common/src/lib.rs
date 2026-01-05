@@ -1,0 +1,10 @@
+//! FlowSTT Common Library
+//!
+//! Shared types and IPC protocol for communication between the FlowSTT CLI,
+//! service, and GUI components.
+
+pub mod ipc;
+pub mod security;
+pub mod types;
+
+pub use types::*;
