@@ -173,6 +173,69 @@ impl WhisperFullParams {
         let mel_frames = (n_samples / 160 + 1).min(1500) as c_int;
         self.audio_ctx = mel_frames;
     }
+
+    /// Configure parameters with hallucination mitigation for transcription.
+    ///
+    /// This method applies settings that help prevent whisper from generating
+    /// repetitive or hallucinated content, which is a known issue with the model.
+    ///
+    /// Key mitigations:
+    /// - `no_context = true`: Prevents repetition from propagating between segments
+    /// - `entropy_thold`: Filters uncertain/low-confidence outputs
+    /// - `logprob_thold`: Filters low-probability token sequences
+    /// - `no_speech_thold`: Better detection of actual silence vs hallucinated speech
+    /// - `suppress_nst`: Suppresses non-speech tokens
+    pub fn configure_with_hallucination_mitigation(&mut self) {
+        // IMPORTANT: Disable cross-segment context to prevent repetition propagation
+        // When true, each segment is transcribed independently without using the
+        // previous segment's output as a prompt. This prevents a single repetition
+        // from snowballing into massive loops across multiple segments.
+        self.no_context = true;
+
+        // Allow multiple output segments per chunk (for longer audio)
+        self.single_segment = false;
+        // Suppress blank outputs
+        self.suppress_blank = true;
+        // Enable timestamps for output
+        self.no_timestamps = false;
+        // Disable printing
+        self.print_special = false;
+        self.print_progress = false;
+        self.print_realtime = false;
+        self.print_timestamps = false;
+
+        // Process full audio (no duration limit)
+        self.duration_ms = 0;
+
+        // Max tokens limit - 0 to disable and let whisper process all audio
+        // Hallucination mitigation is handled by no_context=true and post-processing
+        self.max_tokens = 0;
+
+        // === Hallucination mitigation settings ===
+
+        // Entropy threshold: segments with entropy above this are considered uncertain
+        // Higher value = more aggressive filtering of uncertain outputs
+        self.entropy_thold = 2.4;
+
+        // Log probability threshold: segments with avg logprob below this are filtered
+        // Higher (less negative) = more aggressive filtering
+        self.logprob_thold = -0.8;
+
+        // No-speech threshold: probability above which a segment is considered silence
+        // Higher value = more likely to detect silence vs hallucinating content
+        self.no_speech_thold = 0.6;
+
+        // Suppress non-speech tokens (reduces hallucination of music/sounds as words)
+        self.suppress_nst = true;
+
+        // Temperature settings for fallback decoding
+        // Start with deterministic decoding, increase on failure
+        self.temperature = 0.0;
+        self.temperature_inc = 0.2;
+
+        // Length penalty to discourage very long outputs (hallucination mitigation)
+        self.length_penalty = 1.0;
+    }
 }
 
 /// Sampling strategy enum matching whisper.cpp

@@ -32,6 +32,10 @@ const MIN_SEGMENT_DURATION_MS: u64 = 500;
 /// Approximately -40dB
 const MIN_AUDIO_RMS_THRESHOLD: f32 = 0.01;
 
+/// Safety margin before word break point (ms) - ensures we don't cut into the end of speech
+/// The extraction point will be (gap_start - margin) rather than gap_midpoint
+const WORD_BREAK_PRE_MARGIN_MS: u64 = 30;
+
 // ============================================================================
 // Segment Ring Buffer
 // ============================================================================
@@ -345,22 +349,31 @@ impl TranscribeState {
     }
 
     /// Handle speech-started event: mark segment start including lookback
+    ///
+    /// Note: `lookback_samples` from the speech detector is in MONO samples (frames).
+    /// We need to convert to stereo samples for the ring buffer which stores interleaved stereo.
     pub fn on_speech_started(&mut self, lookback_samples: usize) {
         if !self.is_active {
             return;
         }
 
+        // Convert mono lookback samples to stereo samples for ring buffer
+        let lookback_stereo_samples = lookback_samples * self.channels as usize;
+
         self.in_speech = true;
-        self.segment_start_idx = self.ring_buffer.index_from_lookback(lookback_samples);
+        self.segment_start_idx = self
+            .ring_buffer
+            .index_from_lookback(lookback_stereo_samples);
         // Start duration tracking from zero (lookback samples are pre-speech)
         self.segment_sample_count = 0;
         self.seeking_word_break = false;
-        // Remember lookback count for proper word break extraction
-        self.lookback_sample_count = lookback_samples;
+        // Remember lookback count (in stereo samples) for proper word break extraction
+        self.lookback_sample_count = lookback_stereo_samples;
         tracing::debug!(
-            "[TranscribeState] Speech started, segment_start_idx={}, lookback={}",
+            "[TranscribeState] Speech started, segment_start_idx={}, lookback={} mono -> {} stereo",
             self.segment_start_idx,
-            lookback_samples
+            lookback_samples,
+            lookback_stereo_samples
         );
     }
 
@@ -394,23 +407,33 @@ impl TranscribeState {
         Some(segment)
     }
 
-    /// Convert sample count to milliseconds
+    /// Convert sample count to milliseconds.
+    /// Note: sample count here is raw samples (includes all channels),
+    /// so we divide by channels to get frames, then convert to ms.
     fn samples_to_ms(&self, samples: u64) -> u64 {
-        samples * 1000 / self.sample_rate as u64
+        let frames = samples / self.channels as u64;
+        frames * 1000 / self.sample_rate as u64
     }
 
-    /// Convert milliseconds to sample count
+    /// Convert milliseconds to sample count.
+    /// Note: Returns raw sample count (includes all channels),
+    /// so we multiply frames by channels.
     fn ms_to_samples(&self, ms: u64) -> u64 {
-        ms * self.sample_rate as u64 / 1000
+        let frames = ms * self.sample_rate as u64 / 1000;
+        frames * self.channels as u64
     }
 
     /// Handle word-break event: if seeking a word break, extract and submit segment
     ///
     /// Parameters:
-    /// - `offset_ms`: Offset from speech start where the word break occurred (from speech detector)
+    /// - `offset_ms`: Offset from speech start where the word break gap started (from speech detector)
     /// - `gap_duration_ms`: Duration of the gap in milliseconds
     ///
     /// Returns Some(segment) if extraction occurred
+    ///
+    /// Note: We extract at the START of the gap (minus a small margin) rather than the midpoint.
+    /// This ensures we capture all speech before the pause and don't accidentally cut into
+    /// the end of a word. The next segment will naturally start from this point.
     pub fn on_word_break(&mut self, offset_ms: u32, gap_duration_ms: u32) -> Option<Vec<f32>> {
         if !self.is_active || !self.in_speech || !self.seeking_word_break {
             return None;
@@ -420,16 +443,30 @@ impl TranscribeState {
         // Our segment includes lookback samples at the start
         // So we need to add lookback to get the correct extraction point
 
-        // Calculate extraction point: midpoint of the word break gap, plus lookback
-        let gap_midpoint_ms = offset_ms as u64 + (gap_duration_ms as u64 / 2);
-        let gap_midpoint_samples = self.ms_to_samples(gap_midpoint_ms);
+        // Calculate extraction point: start of the word break gap, with safety margin
+        // Using gap start (not midpoint) ensures we don't cut into the preceding word
+        // The margin backs up slightly to ensure we capture any trailing sounds
+        let gap_start_ms = offset_ms as u64;
+        let extraction_point_ms = gap_start_ms.saturating_sub(WORD_BREAK_PRE_MARGIN_MS);
+        let extraction_point_samples = self.ms_to_samples(extraction_point_ms);
 
         // Total extraction length includes lookback samples
-        let extraction_length = self.lookback_sample_count as u64 + gap_midpoint_samples;
+        let extraction_length = self.lookback_sample_count as u64 + extraction_point_samples;
 
         // Ensure we don't extract more than we have in the segment
         let total_segment_samples = self.lookback_sample_count as u64 + self.segment_sample_count;
         let extraction_length = extraction_length.min(total_segment_samples);
+
+        // Don't extract if the segment would be too short
+        let extraction_duration_ms = self.samples_to_ms(extraction_length);
+        if extraction_duration_ms < MIN_SEGMENT_DURATION_MS {
+            tracing::debug!(
+                "[TranscribeState] Word break would create segment too short ({}ms < {}ms), skipping",
+                extraction_duration_ms,
+                MIN_SEGMENT_DURATION_MS
+            );
+            return None;
+        }
 
         if extraction_length == 0 {
             tracing::debug!(
@@ -452,12 +489,13 @@ impl TranscribeState {
         }
 
         tracing::debug!(
-            "[TranscribeState] Timed segment at word break (offset: {}ms, gap: {}ms), extracted {} samples ({} lookback + {} speech)",
+            "[TranscribeState] Timed segment at word break (offset: {}ms, gap: {}ms), extracted {} samples ({} lookback + {} speech) at extraction point {}ms",
             offset_ms,
             gap_duration_ms,
             segment.len(),
             self.lookback_sample_count,
-            gap_midpoint_samples
+            extraction_point_samples,
+            extraction_point_ms
         );
 
         // Queue the segment for transcription (will validate before actually queueing)
@@ -467,10 +505,10 @@ impl TranscribeState {
         // No lookback for continuation segments (we already have the audio in the buffer)
         self.segment_start_idx = extraction_end_idx;
         self.lookback_sample_count = 0;
-        // Remaining samples in the segment
+        // Remaining samples in the segment: total minus what we extracted (excluding lookback)
         self.segment_sample_count = self
             .segment_sample_count
-            .saturating_sub(gap_midpoint_samples);
+            .saturating_sub(extraction_point_samples);
         self.seeking_word_break = false;
 
         Some(segment)
@@ -524,7 +562,9 @@ impl TranscribeState {
         }
 
         // Check minimum duration
-        let duration_ms = samples.len() as u64 * 1000 / self.sample_rate as u64;
+        // samples.len() is raw sample count (stereo), divide by channels to get frames
+        let frames = samples.len() as u64 / self.channels as u64;
+        let duration_ms = frames * 1000 / self.sample_rate as u64;
         if duration_ms < MIN_SEGMENT_DURATION_MS {
             tracing::debug!(
                 "[TranscribeState] Segment too short ({}ms < {}ms), skipping",

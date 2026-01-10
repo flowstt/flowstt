@@ -9,6 +9,7 @@
 //! - Excludes app's own audio to prevent feedback
 //! - Converts audio to f32 stereo at 48kHz
 
+use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
 use screencapturekit_sys::{
     cm_sample_buffer_ref::CMSampleBufferRef,
     content_filter::{UnsafeContentFilter, UnsafeInitParams},
@@ -232,6 +233,11 @@ impl Drop for SCKAudioCapture {
 }
 
 /// Run the ScreenCaptureKit capture thread
+///
+/// This thread runs a CFRunLoop which is required for ScreenCaptureKit's
+/// async completion handlers to fire. Without an active run loop, the
+/// completion handlers for getShareableContent and startCapture will
+/// never be called, causing hangs.
 fn run_sck_thread(
     cmd_rx: mpsc::Receiver<SCKCommand>,
     audio_tx: mpsc::Sender<SCKAudioSamples>,
@@ -242,15 +248,22 @@ fn run_sck_thread(
     // State for active capture
     let mut capture_state: Option<SCKCaptureState> = None;
 
-    loop {
-        // Check for commands with a short timeout
-        let timeout = if capture_state.is_some() {
-            std::time::Duration::from_millis(10)
-        } else {
-            std::time::Duration::from_secs(1)
-        };
+    // Get the run loop for this thread
+    let run_loop = CFRunLoop::get_current();
 
-        match cmd_rx.recv_timeout(timeout) {
+    loop {
+        // Run the CFRunLoop for a short interval to process any pending callbacks
+        // This is essential for ScreenCaptureKit completion handlers to fire
+        // The run loop will return after the timeout or if it has no sources
+        // (in which case we immediately continue to check for commands)
+        CFRunLoop::run_in_mode(
+            unsafe { kCFRunLoopDefaultMode },
+            std::time::Duration::from_millis(10),
+            true,
+        );
+
+        // Check for commands (non-blocking)
+        match cmd_rx.try_recv() {
             Ok(SCKCommand::Start { result_tx }) => {
                 // Stop any existing capture
                 if let Some(state) = capture_state.take() {
@@ -283,12 +296,14 @@ fn run_sck_thread(
                     drop(state);
                 }
                 is_capturing.store(false, Ordering::SeqCst);
+                run_loop.stop();
                 break;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Continue loop - audio is delivered via callbacks
+            Err(mpsc::TryRecvError::Empty) => {
+                // No commands, continue running the loop
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(mpsc::TryRecvError::Disconnected) => {
+                run_loop.stop();
                 break;
             }
         }
@@ -503,11 +518,13 @@ impl Drop for SCKCaptureState {
 
 /// Start a ScreenCaptureKit capture session
 fn start_capture(audio_tx: mpsc::Sender<SCKAudioSamples>) -> Result<SCKCaptureState, String> {
-    tracing::debug!("ScreenCaptureKit: Starting capture");
+    tracing::info!("ScreenCaptureKit: Starting capture - getting shareable content...");
 
     // Get shareable content
     let content = UnsafeSCShareableContent::get()
         .map_err(|e| format!("Failed to get shareable content: {}", e))?;
+
+    tracing::info!("ScreenCaptureKit: Got shareable content, looking for display...");
 
     // Get the first display (required even for audio-only capture)
     let display = content
@@ -518,12 +535,19 @@ fn start_capture(audio_tx: mpsc::Sender<SCKAudioSamples>) -> Result<SCKCaptureSt
 
     let display_width = display.get_width();
     let display_height = display.get_height();
+    tracing::debug!(
+        "ScreenCaptureKit: Found display {}x{}",
+        display_width,
+        display_height
+    );
 
     // Create content filter for the display
+    tracing::debug!("ScreenCaptureKit: Creating content filter...");
     let filter = UnsafeContentFilter::init(UnsafeInitParams::Display(display));
 
     // Configure stream with audio enabled
     // Use minimal video settings since we only want audio
+    tracing::debug!("ScreenCaptureKit: Configuring stream...");
     let config = UnsafeStreamConfiguration {
         width: display_width.min(320), // Small to minimize overhead
         height: display_height.min(240),
@@ -540,9 +564,11 @@ fn start_capture(audio_tx: mpsc::Sender<SCKAudioSamples>) -> Result<SCKCaptureSt
     let stop_flag_clone = stop_flag.clone();
 
     // Create stream
+    tracing::debug!("ScreenCaptureKit: Creating SCStream...");
     let stream = UnsafeSCStream::init(filter, config.into(), AudioCaptureErrorHandler);
 
     // Add audio output handler
+    tracing::debug!("ScreenCaptureKit: Adding audio output handler...");
     let handler = AudioOutputHandler {
         tx: audio_tx,
         stop_flag: stop_flag.clone(),
@@ -550,6 +576,7 @@ fn start_capture(audio_tx: mpsc::Sender<SCKAudioSamples>) -> Result<SCKCaptureSt
     stream.add_stream_output(handler, SC_STREAM_OUTPUT_TYPE_AUDIO);
 
     // Start capture
+    tracing::debug!("ScreenCaptureKit: Starting capture...");
     stream
         .start_capture()
         .map_err(|e| format!("Failed to start capture: {}", e))?;

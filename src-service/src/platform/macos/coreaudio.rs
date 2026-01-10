@@ -786,7 +786,7 @@ fn run_capture_thread(
     aec_enabled: Arc<Mutex<bool>>,
     recording_mode: Arc<Mutex<RecordingMode>>,
 ) {
-    tracing::debug!("CoreAudio: Capture thread started");
+    tracing::debug!("CoreAudio: Capture thread started and ready to receive commands");
 
     // Create mixer (owned by this thread)
     let mut mixer = AudioMixer::new(audio_tx, aec_enabled, recording_mode);
@@ -822,6 +822,8 @@ fn run_capture_thread(
                 source2_id,
                 result_tx,
             }) => {
+                tracing::debug!("CoreAudio: Received StartSources command");
+
                 // Stop any existing capture
                 if let Some(manager) = capture_manager.take() {
                     drop(manager);
@@ -849,6 +851,10 @@ fn run_capture_thread(
                 mixer.set_num_streams(num_streams);
 
                 // Start capture
+                tracing::debug!(
+                    "CoreAudio: Starting MultiCaptureManager (source1={:?}, loopback1={}, source2={:?}, loopback2={})",
+                    source1_id, is_loopback1, source2_id, is_loopback2
+                );
                 match MultiCaptureManager::new(
                     source1_id,
                     is_loopback1,

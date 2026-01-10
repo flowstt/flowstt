@@ -260,9 +260,15 @@ impl SpeechDetector {
             last_state_change: SpeechStateChange::None,
 
             // Word break detection initialization
-            word_break_threshold_ratio: 0.5,
-            min_word_break_samples: (sample_rate as u64 * 15 / 1000) as u32,
-            max_word_break_samples: (sample_rate as u64 * 200 / 1000) as u32,
+            // Threshold ratio: amplitude must drop to this fraction of recent average
+            // Using 0.3 (30%) to be more conservative and avoid false positives
+            word_break_threshold_ratio: 0.3,
+            // Minimum gap duration: 80ms - shorter gaps are likely within-word pauses
+            // (was 15ms which was far too aggressive)
+            min_word_break_samples: (sample_rate as u64 * 80 / 1000) as u32,
+            // Maximum gap duration: 250ms - longer gaps will trigger speech-end instead
+            // (was 200ms which excluded natural sentence pauses)
+            max_word_break_samples: (sample_rate as u64 * 250 / 1000) as u32,
             recent_speech_window_samples: (sample_rate as u64 * 100 / 1000) as u32,
             recent_speech_amplitude_sum: 0.0,
             recent_speech_amplitude_count: 0,
