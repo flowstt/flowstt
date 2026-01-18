@@ -45,12 +45,60 @@ pub fn is_shutdown_requested() -> bool {
 }
 
 fn main() {
+    // Check for --check-gpu flag for quick GPU diagnostics
+    let check_gpu = std::env::args().any(|arg| arg == "--check-gpu");
+
     // Initialize logging with RUST_LOG env var support
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    // If --check-gpu, just initialize whisper and print GPU status, then exit
+    if check_gpu {
+        println!("=== GPU Check Mode ===");
+        println!("Initializing whisper library and checking GPU status...\n");
+
+        // Initialize the whisper library (this loads ggml backends)
+        match transcription::whisper_ffi::init_library() {
+            Ok(()) => println!("Whisper library initialized successfully"),
+            Err(e) => {
+                println!("ERROR: Failed to initialize whisper library: {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        // Get system info
+        match transcription::whisper_ffi::get_system_info() {
+            Ok(info) => {
+                println!("\nSystem Info: {}", info);
+                let has_cuda = info.contains("CUDA");
+                let has_metal = info.contains("METAL = 1");
+                let has_vulkan = info.contains("VULKAN = 1");
+                println!("\nGPU Backends:");
+                println!("  CUDA:   {}", if has_cuda { "YES" } else { "NO" });
+                println!("  Metal:  {}", if has_metal { "YES" } else { "NO" });
+                println!("  Vulkan: {}", if has_vulkan { "YES" } else { "NO" });
+            }
+            Err(e) => println!("ERROR: Failed to get system info: {}", e),
+        }
+
+        // Try to load the model to trigger full GPU initialization
+        println!("\nAttempting to load whisper model...");
+        let mut transcriber = transcription::Transcriber::new();
+        if transcriber.is_model_available() {
+            match transcriber.load_model() {
+                Ok(()) => println!("Model loaded successfully"),
+                Err(e) => println!("ERROR: Failed to load model: {}", e),
+            }
+        } else {
+            println!("Model not found at: {:?}", transcriber.get_model_path());
+        }
+
+        println!("\n=== GPU Check Complete ===");
+        return;
+    }
 
     info!("FlowSTT Service starting (pid: {})...", std::process::id());
 
