@@ -11,6 +11,7 @@ export default defineConfig(async () => ({
       input: {
         main: "index.html",
         visualization: "visualization.html",
+        about: "about.html",
       },
     },
   },

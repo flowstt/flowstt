@@ -591,23 +591,6 @@ async function checkCudaStatus() {
 
 // ============== Window Management ==============
 
-async function closeApp() {
-  // Notify service we're disconnecting (stops capture for security)
-  try {
-    await invoke("app_disconnect");
-  } catch (error) {
-    console.error("Error sending disconnect:", error);
-  }
-  
-  const vizWindow = await WebviewWindow.getByLabel("visualization");
-  if (vizWindow) {
-    await vizWindow.destroy();
-  }
-
-  const mainWindow = getCurrentWindow();
-  await mainWindow.destroy();
-}
-
 async function openVisualizationWindow() {
   const vizWindow = await WebviewWindow.getByLabel("visualization");
   if (!vizWindow) {
@@ -676,7 +659,9 @@ window.addEventListener("DOMContentLoaded", () => {
   closeBtn?.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    await closeApp();
+    // Hide to tray instead of closing
+    const mainWindow = getCurrentWindow();
+    await mainWindow.hide();
   });
 
   // Cleanup on close - notify service we're disconnecting

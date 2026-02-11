@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main and visualization windows",
-  "windows": ["main", "visualization"],
+  "description": "Capability for all application windows",
+  "windows": ["main", "visualization", "about"],
   "permissions": [
     "core:default",
     "core:window:default",

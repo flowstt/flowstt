@@ -4,6 +4,7 @@
 //! All audio capture and transcription is handled by the service via IPC.
 
 mod ipc_client;
+mod tray;
 
 use flowstt_common::ipc::{Request, Response};
 use flowstt_common::{AudioDevice, KeyCode, RecordingMode, TranscriptionMode};
@@ -347,6 +348,25 @@ pub fn run() {
         .manage(AppState {
             ipc: SharedIpcClient::new(),
             event_task_running: Arc::new(Mutex::new(false)),
+        })
+        .setup(|app| {
+            // Set up the system tray
+            if let Err(e) = tray::setup_tray(app) {
+                eprintln!("[FlowSTT] Failed to set up system tray: {}", e);
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Handle window close - hide to tray instead of exiting
+            #[cfg(windows)]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    // Hide to tray instead of closing
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // About window and other windows close normally
+            }
         })
         .invoke_handler(tauri::generate_handler![
             list_all_sources,

@@ -1,0 +1,53 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
+
+const WEBSITE_URL = "https://github.com/keathmilligan/flowstt";
+const GITHUB_URL = "https://github.com/keathmilligan/flowstt";
+const LICENSE_URL = "https://github.com/keathmilligan/flowstt/blob/main/LICENSE";
+
+/**
+ * Open an external URL in the default browser.
+ */
+function openExternal(url: string) {
+    window.open(url, "_blank");
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+    // Set version
+    try {
+        const version = await getVersion();
+        const versionEl = document.getElementById("about-version");
+        if (versionEl) {
+            versionEl.textContent = `Version ${version}`;
+        }
+    } catch (e) {
+        console.error("Failed to get version:", e);
+    }
+
+    // Close button - use destroy() like main window does
+    const closeBtn = document.getElementById("close-btn");
+    if (closeBtn) {
+        closeBtn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const win = getCurrentWindow();
+            await win.destroy();
+        });
+    }
+
+    // External links
+    document.getElementById("link-website")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        openExternal(WEBSITE_URL);
+    });
+
+    document.getElementById("link-github")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        openExternal(GITHUB_URL);
+    });
+
+    document.getElementById("link-license")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        openExternal(LICENSE_URL);
+    });
+});

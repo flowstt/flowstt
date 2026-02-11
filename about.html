@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About FlowSTT</title>
+    <link rel="stylesheet" href="/src/about.css">
+</head>
+<body>
+    <div class="about-container" data-tauri-drag-region>
+        <button class="close-btn" id="close-btn" title="Close">&times;</button>
+        <div class="about-header" data-tauri-drag-region>
+        </div>
+        <div class="about-content">
+            <img src="/images/flowstt-portrait.svg" alt="FlowSTT" class="about-logo">
+            <p class="about-version" id="about-version">Version loading...</p>
+            <p class="about-description">
+                A voice transcription agent for fluid, natural conversation.
+            </p>
+            <div class="about-links">
+                <a href="#" id="link-website" class="about-link">Website</a>
+                <a href="#" id="link-github" class="about-link">GitHub</a>
+            </div>
+            <div class="about-legal">
+                <p class="about-copyright">Copyright 2024-2026 Keath Milligan</p>
+                <p class="about-license">
+                    Released under the <a href="#" id="link-license">MIT License</a>
+                </p>
+            </div>
+        </div>
+    </div>
+    <script type="module" src="/src/about.ts"></script>
+</body>
+</html>
