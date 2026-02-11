@@ -262,37 +262,18 @@ async fn get_ptt_status(state: State<'_, AppState>) -> Result<LocalPttStatus, St
     }
 }
 
-/// Signal that the app is ready to begin capture
+/// Connect to the service and start event forwarding.
+/// The service is already operational; this just subscribes to its event stream.
 #[tauri::command]
-async fn app_ready(state: State<'_, AppState>, app_handle: AppHandle) -> Result<(), String> {
-    let response = send_request(&state.ipc, Request::AppReady).await?;
-
-    match response {
-        Response::Ok => {
-            // Start event forwarding now that we're ready
-            start_event_forwarding(
-                state.ipc.clone(),
-                app_handle,
-                state.event_task_running.clone(),
-            )
-            .await;
-            Ok(())
-        }
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
-}
-
-/// Signal that the app is disconnecting (for cleanup)
-#[tauri::command]
-async fn app_disconnect(state: State<'_, AppState>) -> Result<(), String> {
-    let response = send_request(&state.ipc, Request::AppDisconnect).await?;
-
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn connect_events(state: State<'_, AppState>, app_handle: AppHandle) -> Result<(), String> {
+    // Start event forwarding (connects and subscribes to service events)
+    start_event_forwarding(
+        state.ipc.clone(),
+        app_handle,
+        state.event_task_running.clone(),
+    )
+    .await;
+    Ok(())
 }
 
 /// Start the event forwarding task.
@@ -380,8 +361,7 @@ pub fn run() {
             set_transcription_mode,
             set_ptt_key,
             get_ptt_status,
-            app_ready,
-            app_disconnect,
+            connect_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

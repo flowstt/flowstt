@@ -214,10 +214,6 @@ fn start_ptt_capture() -> Result<(), String> {
     let (source1_id, source2_id, aec_enabled, recording_mode) = {
         let state = futures::executor::block_on(state_arc.lock());
 
-        if !state.app_ready {
-            return Err("App not ready".to_string());
-        }
-
         if !state.has_primary_source() {
             return Err("No primary audio source configured".to_string());
         }

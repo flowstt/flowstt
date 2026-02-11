@@ -10,8 +10,6 @@ use tokio::sync::Mutex;
 /// Global service state
 #[derive(Default)]
 pub struct ServiceState {
-    /// Whether a GUI app is connected and ready
-    pub app_ready: bool,
     /// Current transcription status (capturing, in_speech, queue_depth, error)
     pub transcribe_status: TranscribeStatus,
     /// Whether AEC is enabled
@@ -36,9 +34,9 @@ impl ServiceState {
         self.source1_id.is_some()
     }
 
-    /// Check if capture should be active (app ready + primary source configured)
+    /// Check if capture should be active (primary source configured)
     pub fn should_capture(&self) -> bool {
-        self.app_ready && self.has_primary_source()
+        self.has_primary_source()
     }
 }
 

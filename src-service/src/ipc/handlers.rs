@@ -58,13 +58,9 @@ pub fn init_transcription_system() {
 
 /// Start audio capture with current source configuration.
 /// Returns Ok if capture started, Err with message if it failed.
-async fn start_capture() -> Result<(), String> {
+pub async fn start_capture() -> Result<(), String> {
     let state_arc = get_service_state();
     let state = state_arc.lock().await;
-
-    if !state.app_ready {
-        return Err("App not ready".to_string());
-    }
 
     if !state.has_primary_source() {
         return Err("No primary audio source configured".to_string());
@@ -404,7 +400,7 @@ pub async fn handle_request(request: Request) -> Response {
                 state.transcription_mode = mode;
                 (
                     old_mode,
-                    state.app_ready && state.has_primary_source(),
+                    state.has_primary_source(),
                     state.ptt_key,
                 )
             };
@@ -519,68 +515,6 @@ pub async fn handle_request(request: Request) -> Response {
                 runtime_available,
                 system_info,
             })
-        }
-
-        Request::AppReady => {
-            let state_arc = get_service_state();
-
-            let (was_ready, should_capture) = {
-                let mut state = state_arc.lock().await;
-                let was = state.app_ready;
-                state.app_ready = true;
-                (was, state.should_capture())
-            };
-
-            if was_ready {
-                info!("App already marked as ready");
-                return Response::Ok;
-            }
-
-            info!("App ready signal received");
-
-            // Start capture if primary source is already configured
-            if should_capture {
-                if let Err(e) = start_capture().await {
-                    let mut state = state_arc.lock().await;
-                    state.transcribe_status.error = Some(e.clone());
-
-                    broadcast_event(Response::Event {
-                        event: EventType::CaptureStateChanged {
-                            capturing: false,
-                            error: Some(e),
-                        },
-                    });
-                }
-            }
-
-            Response::Ok
-        }
-
-        Request::AppDisconnect => {
-            let state_arc = get_service_state();
-
-            let was_capturing = {
-                let mut state = state_arc.lock().await;
-                let was = state.transcribe_status.capturing;
-                state.app_ready = false;
-                was
-            };
-
-            info!("App disconnect signal received - stopping capture for security");
-
-            // Stop capture immediately when GUI disconnects
-            if was_capturing {
-                stop_capture().await;
-
-                broadcast_event(Response::Event {
-                    event: EventType::CaptureStateChanged {
-                        capturing: false,
-                        error: None,
-                    },
-                });
-            }
-
-            Response::Ok
         }
 
         Request::Shutdown => {

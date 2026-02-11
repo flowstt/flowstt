@@ -4,10 +4,12 @@
 //! and routes requests to handlers. It supports both Unix sockets (Linux/macOS)
 //! and named pipes (Windows).
 
-use flowstt_common::ipc::{get_socket_path, read_json, write_json, IpcError, Request, Response};
+use flowstt_common::ipc::{
+    get_socket_path, read_json, write_json, EventType, IpcError, Request, Response,
+};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::handlers::handle_request;
 use crate::is_shutdown_requested;
@@ -29,9 +31,55 @@ pub fn get_event_sender() -> EventSender {
 }
 
 /// Broadcast an event to all subscribed clients.
+/// When no clients are subscribed, log the event instead of silently dropping it.
 pub fn broadcast_event(event: Response) {
     let sender = get_event_sender();
-    // Ignore errors (no receivers is fine)
+    if sender.receiver_count() == 0 {
+        // No clients subscribed - log based on event type
+        if let Response::Event { ref event } = event {
+            match event {
+                EventType::TranscriptionComplete(result) => {
+                    info!("Transcription complete (no clients): {}", result.text);
+                }
+                EventType::VisualizationData(_) => {
+                    // High-frequency event - use debug level
+                    debug!("Visualization data generated (no clients)");
+                }
+                EventType::SpeechStarted => {
+                    debug!("Speech started (no clients)");
+                }
+                EventType::SpeechEnded { duration_ms } => {
+                    debug!("Speech ended (no clients): {}ms", duration_ms);
+                }
+                EventType::CaptureStateChanged { capturing, error } => {
+                    info!(
+                        "Capture state changed (no clients): capturing={}, error={:?}",
+                        capturing, error
+                    );
+                }
+                EventType::PttPressed => {
+                    info!("PTT pressed (no clients)");
+                }
+                EventType::PttReleased => {
+                    info!("PTT released (no clients)");
+                }
+                EventType::TranscriptionModeChanged { mode } => {
+                    info!("Transcription mode changed (no clients): {:?}", mode);
+                }
+                EventType::ModelDownloadProgress { percent } => {
+                    info!("Model download progress (no clients): {}%", percent);
+                }
+                EventType::ModelDownloadComplete { success } => {
+                    info!("Model download complete (no clients): success={}", success);
+                }
+                EventType::Shutdown => {
+                    info!("Shutdown event (no clients)");
+                }
+            }
+        }
+        return;
+    }
+    // Send to subscribed clients (ignore lagged errors)
     let _ = sender.send(event);
 }
 

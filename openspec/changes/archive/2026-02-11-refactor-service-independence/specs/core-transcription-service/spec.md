@@ -1,8 +1,5 @@
-# core-transcription-service Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change refactor-core-transcription-service. Update Purpose after archive.
-## Requirements
 ### Requirement: Transcription Service Process
 The system SHALL provide a standalone background service process (`flowstt-service`) that handles all voice transcription functionality. The service runs independently of any GUI or CLI client, automatically starting audio capture and the transcription engine on startup using the default audio input device. Clients are optional and serve as observers and configuration overrides.
 
@@ -29,29 +26,6 @@ The system SHALL provide a standalone background service process (`flowstt-servi
 #### Scenario: No audio devices available on startup
 - **WHEN** the service starts and no audio input devices are detected
 - **THEN** the service starts but logs a warning and waits for a client to configure audio sources via SetSources
-
-### Requirement: IPC Communication Protocol
-The system SHALL use platform-native IPC mechanisms (Unix socket on Linux/macOS, named pipe on Windows) for client-service communication using length-prefixed JSON messages.
-
-#### Scenario: Unix socket on Linux
-- **WHEN** the service starts on Linux
-- **THEN** it creates a Unix socket at `$XDG_RUNTIME_DIR/flowstt/service.sock`
-
-#### Scenario: Unix socket on macOS
-- **WHEN** the service starts on macOS
-- **THEN** it creates a Unix socket at `$TMPDIR/flowstt/service.sock`
-
-#### Scenario: Named pipe on Windows
-- **WHEN** the service starts on Windows
-- **THEN** it creates a named pipe at `\\.\pipe\flowstt-service`
-
-#### Scenario: Message format
-- **WHEN** a client sends a request or the service sends a response
-- **THEN** the message is formatted as a 4-byte little-endian length prefix followed by JSON payload
-
-#### Scenario: Stale socket cleanup
-- **WHEN** the service starts and finds an existing socket file with no listening process
-- **THEN** it removes the stale socket and creates a new one
 
 ### Requirement: Service Request Handling
 The system SHALL handle client requests for device enumeration, transcription control, and status queries. The `AppReady` and `AppDisconnect` requests are removed; the service does not require client readiness signals.
@@ -130,56 +104,4 @@ The system SHALL manage its lifecycle independently of client connections. The s
 - **WHEN** all clients have disconnected and new speech is detected
 - **THEN** the service transcribes the speech and logs the result
 
-### Requirement: Service Security
-The system SHALL verify client identity using platform peer credential mechanisms to prevent unauthorized access.
-
-#### Scenario: Peer verification on Unix
-- **WHEN** a client connects on Linux or macOS
-- **THEN** the service verifies the client's UID matches the service's UID before accepting requests
-
-#### Scenario: Peer verification on Windows
-- **WHEN** a client connects on Windows
-- **THEN** the service verifies the client process belongs to the same user session
-
-#### Scenario: Unauthorized connection rejected
-- **WHEN** a connection fails peer verification
-- **THEN** the service closes the connection without processing any requests
-
-### Requirement: Service Audio Backend Integration
-The system SHALL initialize and manage platform-specific audio backends for capture and processing.
-
-#### Scenario: Linux backend initialization
-- **WHEN** the service starts on Linux
-- **THEN** it initializes the PipeWire audio backend
-
-#### Scenario: Windows backend initialization
-- **WHEN** the service starts on Windows
-- **THEN** it initializes the WASAPI audio backend
-
-#### Scenario: macOS backend initialization
-- **WHEN** the service starts on macOS
-- **THEN** it initializes the CoreAudio and ScreenCaptureKit backends
-
-#### Scenario: Backend initialization failure
-- **WHEN** audio backend initialization fails
-- **THEN** the service starts but responds to device/transcription requests with appropriate error messages
-
-### Requirement: Service Transcription Pipeline
-The system SHALL maintain the transcription pipeline including speech detection, segment buffering, and Whisper processing.
-
-#### Scenario: Speech detection in service
-- **WHEN** transcription is active
-- **THEN** the service runs speech detection on captured audio and emits state change events
-
-#### Scenario: Segment extraction in service
-- **WHEN** speech ends or duration threshold is reached
-- **THEN** the service extracts the audio segment and queues it for transcription
-
-#### Scenario: Whisper transcription in service
-- **WHEN** segments are queued
-- **THEN** the service processes them sequentially through Whisper and emits transcription results
-
-#### Scenario: Model loading in service
-- **WHEN** the first transcription is requested and the model is not loaded
-- **THEN** the service loads the Whisper model before processing
 

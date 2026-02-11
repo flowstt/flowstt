@@ -140,52 +140,35 @@ fn main() {
         // Initialize transcription system (worker ready to process segments)
         ipc::handlers::init_transcription_system();
 
-        // In PTT mode, configure default audio source and start monitoring
+        // Auto-configure default audio source and start capture immediately
         {
             let state_arc = state::get_service_state();
-            let is_ptt_mode = {
-                let state = state_arc.lock().await;
-                state.transcription_mode == flowstt_common::TranscriptionMode::PushToTalk
-            };
 
-            if is_ptt_mode {
-                // Get default input device
-                let default_source = platform::get_backend().and_then(|b| {
-                    let devices = b.list_input_devices();
-                    devices.into_iter().next().map(|d| d.id)
-                });
+            // Get default input device
+            let default_source = platform::get_backend().and_then(|b| {
+                let devices = b.list_input_devices();
+                devices.into_iter().next().map(|d| d.id)
+            });
 
-                if let Some(source_id) = default_source {
-                    info!("PTT mode: Using default audio source: {}", source_id);
+            if let Some(source_id) = default_source {
+                info!("Using default audio source: {}", source_id);
 
-                    // Configure state for PTT operation
-                    {
-                        let mut state = state_arc.lock().await;
-                        state.app_ready = true;
-                        state.source1_id = Some(source_id);
-                    }
-
-                    // Start hotkey monitoring
-                    let ptt_key = {
-                        let state = state_arc.lock().await;
-                        state.ptt_key
-                    };
-
-                    info!("PTT mode: Starting hotkey monitoring for {:?}", ptt_key);
-                    match hotkey::start_hotkey(ptt_key) {
-                        Ok(()) => {
-                            // Start PTT controller to handle key events
-                            if let Err(e) = ptt_controller::start_ptt_controller() {
-                                error!("Failed to start PTT controller: {}", e);
-                            } else {
-                                info!("PTT mode: Ready - press {:?} to record", ptt_key);
-                            }
-                        }
-                        Err(e) => error!("Failed to start hotkey monitoring: {}", e),
-                    }
-                } else {
-                    warn!("PTT mode: No audio input devices found");
+                // Configure state with default source
+                {
+                    let mut state = state_arc.lock().await;
+                    state.source1_id = Some(source_id);
                 }
+
+                // Start capture (handles both Automatic and PTT modes)
+                match ipc::handlers::start_capture().await {
+                    Ok(()) => {
+                        let state = state_arc.lock().await;
+                        info!("Capture started in {:?} mode", state.transcription_mode);
+                    }
+                    Err(e) => error!("Failed to start capture: {}", e),
+                }
+            } else {
+                warn!("No audio input devices found; waiting for client to configure via SetSources");
             }
         }
 

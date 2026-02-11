@@ -106,7 +106,7 @@ The system SHALL support JSON output for all commands to enable scripting and au
 - **THEN** the error is output as a JSON object with an error field
 
 ### Requirement: Service Auto-Spawn
-The system SHALL automatically start the service if it is not running when a CLI command is executed.
+The system SHALL automatically start the service if it is not running when a CLI command is executed. The CLI does not need to send readiness signals after connection; the service is immediately operational.
 
 #### Scenario: Service spawned on first command
 - **WHEN** the user runs any CLI command and the service is not running
@@ -127,6 +127,10 @@ The system SHALL automatically start the service if it is not running when a CLI
 #### Scenario: Service spawn timeout
 - **WHEN** the spawned service does not become ready within 10 seconds
 - **THEN** an error message indicates service startup timed out
+
+#### Scenario: No AppReady required after connect
+- **WHEN** the CLI connects to the service
+- **THEN** it does not send an AppReady request; the service is already capturing and transcribing
 
 ### Requirement: CLI Output Verbosity
 The system SHALL support quiet and verbose output modes.

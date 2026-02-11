@@ -61,12 +61,6 @@ pub enum Request {
     /// Get the current PTT status
     GetPttStatus,
 
-    // === Session Control ===
-    /// Signal that GUI is ready - enables capture when sources are configured
-    AppReady,
-    /// Signal that GUI is disconnecting - stops capture for security
-    AppDisconnect,
-
     // === Service Control ===
     /// Ping for health check
     Ping,

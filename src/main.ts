@@ -664,11 +664,9 @@ window.addEventListener("DOMContentLoaded", () => {
     await mainWindow.hide();
   });
 
-  // Cleanup on close - notify service we're disconnecting
+  // Cleanup on close
   window.addEventListener("beforeunload", () => {
     cleanupEventListeners();
-    // Fire and forget - can't await in beforeunload
-    invoke("app_disconnect").catch(console.error);
   });
 
   // Handle visibility change to refresh transcription display when window becomes visible
@@ -689,12 +687,12 @@ async function initializeApp() {
   // Set up event listeners
   await setupEventListeners();
   
-  // Signal to service that we're ready - this enables capture
+  // Connect to service event stream (service is already operational)
   try {
-    await invoke("app_ready");
-    console.log("App ready signal sent to service");
+    await invoke("connect_events");
+    console.log("Connected to service event stream");
   } catch (error) {
-    console.error("Failed to signal app ready:", error);
+    console.error("Failed to connect to service:", error);
     setStatus(`Connection error: ${error}`, "error");
     return;
   }
