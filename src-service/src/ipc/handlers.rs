@@ -3,7 +3,7 @@
 use flowstt_common::ipc::{EventType, Request, Response};
 use flowstt_common::{CudaStatus, ModelStatus, PttStatus, TranscriptionMode};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::broadcast_event;
 use crate::hotkey;
@@ -241,17 +241,27 @@ pub async fn handle_request(request: Request) -> Response {
         } => {
             let state_arc = get_service_state();
 
-            // Update source configuration and check if we should capture
-            let (was_capturing, should_capture) = {
+            // Update source configuration and check if we should capture.
+            // In PTT mode the hotkey backend and controller run even while
+            // `capturing` is false (audio only flows while the key is held),
+            // so we must also check if the PTT controller is active.
+            let (was_active, should_capture) = {
                 let mut state = state_arc.lock().await;
-                let was = state.transcribe_status.capturing;
-                state.source1_id = source1_id;
-                state.source2_id = source2_id;
+                let was = state.transcribe_status.capturing
+                    || (state.transcription_mode == TranscriptionMode::PushToTalk
+                        && ptt_controller::is_ptt_controller_running());
+                state.source1_id = source1_id.clone();
+                state.source2_id = source2_id.clone();
                 (was, state.should_capture())
             };
 
-            // Stop current capture if running
-            if was_capturing {
+            info!(
+                "Audio sources changed: source1={:?}, source2={:?}",
+                source1_id, source2_id
+            );
+
+            // Stop current capture / PTT monitoring if running
+            if was_active {
                 stop_capture().await;
             }
 
@@ -406,6 +416,11 @@ pub async fn handle_request(request: Request) -> Response {
                 )
             };
 
+            info!(
+                "Transcription mode change requested: {:?} -> {:?} (ready={})",
+                old_mode, mode, is_ready
+            );
+
             // If mode changed and system is ready, restart capture with new mode
             if old_mode != mode && is_ready {
                 // Stop current capture
@@ -413,7 +428,7 @@ pub async fn handle_request(request: Request) -> Response {
 
                 // Restart with new mode
                 if let Err(e) = start_capture().await {
-                    tracing::warn!("Failed to restart capture after mode change: {}", e);
+                    warn!("Failed to restart capture after mode change: {}", e);
                 }
             }
 
@@ -423,7 +438,7 @@ pub async fn handle_request(request: Request) -> Response {
                 ptt_key,
             };
             if let Err(e) = config.save() {
-                tracing::warn!("Failed to save config: {}", e);
+                warn!("Failed to save config: {}", e);
             }
 
             info!("Transcription mode set to {:?}", mode);
@@ -438,20 +453,30 @@ pub async fn handle_request(request: Request) -> Response {
 
         Request::SetPushToTalkKey { key } => {
             let state_arc = get_service_state();
-            let (old_key, transcription_mode, is_capturing_ptt) = {
+            let (old_key, transcription_mode, is_ptt_monitoring) = {
                 let mut state = state_arc.lock().await;
                 let old_key = state.ptt_key;
                 state.ptt_key = key;
-                let is_capturing_ptt = state.transcribe_status.capturing
-                    && state.transcription_mode == TranscriptionMode::PushToTalk;
-                (old_key, state.transcription_mode, is_capturing_ptt)
+                // The hotkey backend runs whenever the PTT controller is
+                // active, regardless of whether audio is currently capturing
+                // (audio only flows while the key is held).
+                let is_ptt_monitoring =
+                    state.transcription_mode == TranscriptionMode::PushToTalk
+                        && ptt_controller::is_ptt_controller_running();
+                (old_key, state.transcription_mode, is_ptt_monitoring)
             };
 
-            // If capturing in PTT mode, restart hotkey with new key
-            if is_capturing_ptt {
+            info!(
+                "PTT key change requested: {:?} -> {:?} (monitoring={})",
+                old_key, key, is_ptt_monitoring
+            );
+
+            // If PTT monitoring is active, restart hotkey with new key
+            if is_ptt_monitoring {
                 hotkey::stop_hotkey();
                 if let Err(e) = hotkey::start_hotkey(key) {
                     // Revert on failure
+                    warn!("Failed to start hotkey with new key {:?}: {}", key, e);
                     let mut state = state_arc.lock().await;
                     state.ptt_key = old_key;
                     let _ = hotkey::start_hotkey(old_key);
@@ -465,7 +490,7 @@ pub async fn handle_request(request: Request) -> Response {
                 ptt_key: key,
             };
             if let Err(e) = config.save() {
-                tracing::warn!("Failed to save config: {}", e);
+                warn!("Failed to save config: {}", e);
             }
 
             info!("PTT key set to {:?}", key);

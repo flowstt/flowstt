@@ -37,7 +37,6 @@ fn get_ptt_thread_running() -> Arc<AtomicBool> {
 }
 
 /// Check if PTT controller thread is running
-#[allow(dead_code)]
 pub fn is_ptt_controller_running() -> bool {
     get_ptt_thread_running().load(Ordering::SeqCst)
 }

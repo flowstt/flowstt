@@ -18,8 +18,8 @@ use windows::Win32::UI::Input::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
-    PostThreadMessageW, RegisterClassW, TranslateMessage, HWND_MESSAGE, MSG, PM_REMOVE, WM_INPUT,
-    WM_QUIT, WNDCLASSW, WS_OVERLAPPED,
+    PostThreadMessageW, RegisterClassW, TranslateMessage, UnregisterClassW, HWND_MESSAGE, MSG,
+    PM_REMOVE, WM_INPUT, WM_QUIT, WNDCLASSW, WS_OVERLAPPED,
 };
 
 /// Raw input keyboard flags
@@ -230,7 +230,11 @@ fn run_message_loop(
     target_requires_e0: bool,
 ) -> Result<(), String> {
     unsafe {
-        // Register window class
+        // Register window class.
+        // The class may already exist from a previous start/stop cycle (it is
+        // unregistered on cleanup, but if the thread was interrupted it could
+        // linger). Treat ERROR_CLASS_ALREADY_EXISTS as success since the
+        // definition is identical.
         let class_name = windows::core::w!("FlowSTT_HotkeyClass");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
@@ -240,7 +244,11 @@ fn run_message_loop(
 
         let atom = RegisterClassW(&wc);
         if atom == 0 {
-            return Err("Failed to register window class".to_string());
+            let err = windows::Win32::Foundation::GetLastError();
+            if err != windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS {
+                return Err(format!("Failed to register window class (error {:?})", err));
+            }
+            debug!("[Hotkey] Window class already registered, reusing");
         }
 
         // Create a message-only window (invisible, just for receiving messages)
@@ -311,6 +319,7 @@ fn run_message_loop(
         });
 
         let _ = DestroyWindow(hwnd);
+        let _ = UnregisterClassW(class_name, None);
 
         debug!("[Hotkey] Message loop cleaned up");
     }
