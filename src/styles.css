@@ -28,6 +28,8 @@
   --waveform-grid: rgba(255, 255, 255, 0.06);
   --waveform-text: rgba(255, 255, 255, 0.5);
   --spectrogram-grid: rgba(255, 255, 255, 0.12);
+  --transcription-font: Inter, Avenir, Helvetica, Arial, sans-serif;
+  --transcription-color: #b0b8c4;
 }
 
 html,
@@ -39,6 +41,12 @@ body {
   overflow: hidden;
   /* Ensure no browser-default borders or outlines */
   border: none;
+  outline: none;
+}
+
+/* Suppress focus outlines on all elements */
+*:focus,
+*:focus-visible {
   outline: none;
 }
 
@@ -74,7 +82,7 @@ img {
 
 .container {
   margin: 0;
-  padding: 0.75rem;
+  padding: 0.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -83,10 +91,8 @@ img {
   position: relative;
 }
 
-.close-btn {
-  position: fixed;
-  top: 6px;
-  right: 6px;
+/* Header icon buttons (about, config, close) */
+.header-btn {
   width: 28px;
   height: 28px;
   min-width: unset;
@@ -95,25 +101,25 @@ img {
   border: none;
   border-radius: 6px;
   color: #4a5568;
-  font-size: 1.25rem;
-  font-weight: 300;
-  line-height: 1;
   cursor: pointer;
   transition: color 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
 }
 
-.close-btn:hover {
+.header-btn:hover {
   color: #8aa;
-  background: transparent;
 }
 
-.close-btn:active {
+.header-btn:active {
   color: #6a7a8a;
-  background: transparent;
+}
+
+.header-btn.close-btn {
+  font-size: 1.85rem;
+  font-weight: 200;
+  line-height: 1;
 }
 
 /* App header */
@@ -133,7 +139,7 @@ img {
 }
 
 .app-logo {
-  height: 36px;
+  height: 27px;
   width: auto;
   pointer-events: none;
 }
@@ -142,7 +148,7 @@ img {
 .mini-waveform {
   display: none;
   width: 52px;
-  height: 40px;
+  height: 27px;
   cursor: pointer;
   border-radius: 4px;
   transition: background-color 0.15s;
@@ -155,14 +161,8 @@ img {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  margin-right: 2rem;
-}
-
-.app-version {
-  font-size: 0.65rem;
-  color: #888;
-  font-weight: 500;
+  gap: 0.35rem;
+  margin-right: -0.3rem;
 }
 
 /* Transcribing indicator */
@@ -273,42 +273,13 @@ h2 {
   color: #aaa;
 }
 
-/* Status row */
-.status-row {
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-  flex-shrink: 0;
-  padding: 0.1rem 0;
-  overflow: hidden;
-}
-
-.status {
-  text-align: left;
-  line-height: 1.25rem;
-  color: #396cd8;
-  font-size: 0.85rem;
-  padding-left: 8px;
-}
-
-.status.progress {
-  color: #28a745;
-}
-
-.status.warning {
-  color: #ffc107;
-}
-
-.status.error {
-  color: #dc3545;
-}
-
 /* Transcription area */
 .transcription-area {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 80px;
+  margin: 0 0.2rem 0.2rem;
 }
 
 .result-box {
@@ -376,8 +347,8 @@ h2 {
 }
 
 .segment-text {
-  color: #7DD3FC;
-  font-family: 'Fira Mono', monospace;
+  color: var(--transcription-color);
+  font-family: var(--transcription-font);
   font-size: 0.85rem;
   line-height: 1.4;
   white-space: pre-wrap;
@@ -530,57 +501,6 @@ button.recording:hover {
 
 .download-status.error {
   color: #dc3545;
-}
-
-/* PTT indicator */
-.ptt-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  background: rgba(100, 100, 100, 0.15);
-  border: 1px solid rgba(100, 100, 100, 0.4);
-  color: #888;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  transition: all 0.2s ease;
-}
-
-.ptt-indicator.active {
-  background: rgba(245, 158, 11, 0.15);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  color: #f59e0b;
-}
-
-.ptt-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #666;
-  transition: all 0.2s ease;
-}
-
-.ptt-indicator.active .ptt-dot {
-  background: #f59e0b;
-  animation: ptt-pulse 0.5s ease-in-out infinite;
-}
-
-.ptt-label {
-  line-height: 1;
-}
-
-@keyframes ptt-pulse {
-  0%, 100% { 
-    opacity: 1;
-    box-shadow: 0 0 4px #f59e0b;
-  }
-  50% { 
-    opacity: 0.7;
-    box-shadow: 0 0 8px #f59e0b;
-  }
 }
 
 .hidden {

@@ -39,18 +39,6 @@ interface CaptureStatus {
 // Transcription mode matching backend
 type TranscriptionMode = "automatic" | "push_to_talk";
 
-interface HotkeyCombination {
-  keys: string[];
-}
-
-interface PttStatus {
-  mode: TranscriptionMode;
-  hotkeys: HotkeyCombination[];
-  is_active: boolean;
-  available: boolean;
-  error: string | null;
-}
-
 // History entry from the service
 interface HistoryEntry {
   id: string;
@@ -67,39 +55,7 @@ interface TranscriptionCompletePayload {
   audio_path: string | null;
 }
 
-// Key code display names (subset for main window display)
-const KEY_DISPLAY_NAMES: Record<string, string> = {
-  right_alt: "Right Alt", left_alt: "Left Alt",
-  right_control: "Right Ctrl", left_control: "Left Ctrl",
-  right_shift: "Right Shift", left_shift: "Left Shift",
-  caps_lock: "Caps Lock", left_meta: "Left Win", right_meta: "Right Win",
-  f1: "F1", f2: "F2", f3: "F3", f4: "F4", f5: "F5", f6: "F6",
-  f7: "F7", f8: "F8", f9: "F9", f10: "F10", f11: "F11", f12: "F12",
-  f13: "F13", f14: "F14", f15: "F15", f16: "F16", f17: "F17", f18: "F18",
-  f19: "F19", f20: "F20", f21: "F21", f22: "F22", f23: "F23", f24: "F24",
-  key_a: "A", key_b: "B", key_c: "C", key_d: "D", key_e: "E", key_f: "F",
-  key_g: "G", key_h: "H", key_i: "I", key_j: "J", key_k: "K", key_l: "L",
-  key_m: "M", key_n: "N", key_o: "O", key_p: "P", key_q: "Q", key_r: "R",
-  key_s: "S", key_t: "T", key_u: "U", key_v: "V", key_w: "W", key_x: "X",
-  key_y: "Y", key_z: "Z",
-  digit0: "0", digit1: "1", digit2: "2", digit3: "3", digit4: "4",
-  digit5: "5", digit6: "6", digit7: "7", digit8: "8", digit9: "9",
-  space: "Space", tab: "Tab", enter: "Enter", escape: "Esc",
-  backspace: "Backspace",
-};
-
-function hotkeyDisplayName(combo: HotkeyCombination): string {
-  return combo.keys.map(k => KEY_DISPLAY_NAMES[k] || k).join(" + ");
-}
-
-function hotkeysDisplaySummary(hotkeys: HotkeyCombination[]): string {
-  if (hotkeys.length === 0) return "None";
-  if (hotkeys.length === 1) return hotkeyDisplayName(hotkeys[0]);
-  return `${hotkeyDisplayName(hotkeys[0])} (+${hotkeys.length - 1} more)`;
-}
-
 // DOM elements
-let statusEl: HTMLElement | null;
 let historyContainer: HTMLElement | null;
 let modelWarning: HTMLElement | null;
 let modelPathEl: HTMLElement | null;
@@ -107,26 +63,15 @@ let downloadModelBtn: HTMLButtonElement | null;
 let downloadStatusEl: HTMLElement | null;
 let miniWaveformCanvas: HTMLCanvasElement | null;
 let closeBtn: HTMLButtonElement | null;
-let pttIndicator: HTMLElement | null;
 
 // State
 let isCapturing = false;
-let inSpeechSegment = false;
-let transcribeQueueDepth = 0;
-let transcriptionMode: TranscriptionMode = "push_to_talk";
-let pttHotkeys: HotkeyCombination[] = [{ keys: ["right_alt"] }];
-let isPttActive = false;
 
 // Event listeners
 let visualizationUnlisten: UnlistenFn | null = null;
 let transcriptionCompleteUnlisten: UnlistenFn | null = null;
 let transcriptionErrorUnlisten: UnlistenFn | null = null;
-let speechStartedUnlisten: UnlistenFn | null = null;
-let speechEndedUnlisten: UnlistenFn | null = null;
 let captureStateChangedUnlisten: UnlistenFn | null = null;
-let pttPressedUnlisten: UnlistenFn | null = null;
-let pttReleasedUnlisten: UnlistenFn | null = null;
-let transcriptionModeChangedUnlisten: UnlistenFn | null = null;
 let historyEntryDeletedUnlisten: UnlistenFn | null = null;
 
 let miniWaveformRenderer: MiniWaveformRenderer | null = null;
@@ -173,37 +118,6 @@ async function downloadModel() {
   }
 }
 
-function setStatus(message: string, type: "normal" | "progress" | "warning" | "error" = "normal") {
-  if (statusEl) {
-    statusEl.textContent = message;
-    statusEl.className = "status";
-    if (type !== "normal") {
-      statusEl.classList.add(type);
-    }
-  }
-}
-
-// Update status based on current state
-function updateStatusDisplay() {
-  if (!isCapturing) {
-    setStatus("Ready - select an audio source to begin");
-    return;
-  }
-
-  let statusText: string;
-  if (inSpeechSegment) {
-    statusText = "Recording speech...";
-  } else if (transcribeQueueDepth > 0) {
-    statusText = `Listening... (${transcribeQueueDepth} pending)`;
-  } else {
-    const modeText = transcriptionMode === "push_to_talk" 
-      ? `PTT Ready (${hotkeysDisplaySummary(pttHotkeys)})`
-      : "Auto (VAD)";
-    statusText = `Listening... [${modeText}]`;
-  }
-  setStatus(statusText, "progress");
-}
-
 // ============== Event Listeners ==============
 
 async function setupEventListeners() {
@@ -231,23 +145,6 @@ async function setupEventListeners() {
     });
   }
 
-  // Speech events
-  if (!speechStartedUnlisten) {
-    speechStartedUnlisten = await listen("speech-started", () => {
-      console.log("[Speech] Started speaking");
-      inSpeechSegment = true;
-      updateStatusDisplay();
-    });
-  }
-
-  if (!speechEndedUnlisten) {
-    speechEndedUnlisten = await listen<number>("speech-ended", (event) => {
-      console.log(`[Speech] Stopped speaking (duration: ${event.payload}ms)`);
-      inSpeechSegment = false;
-      updateStatusDisplay();
-    });
-  }
-
   // Capture state changes
   if (!captureStateChangedUnlisten) {
     captureStateChangedUnlisten = await listen<{capturing: boolean, error: string | null}>(
@@ -255,11 +152,9 @@ async function setupEventListeners() {
       (event) => {
         console.log("[Capture] State changed:", event.payload);
         isCapturing = event.payload.capturing;
-        
+
         if (event.payload.error) {
-          setStatus(`Error: ${event.payload.error}`, "error");
-        } else {
-          updateStatusDisplay();
+          console.error("[Capture] Error:", event.payload.error);
         }
 
         // Update waveform renderer and visibility
@@ -273,36 +168,6 @@ async function setupEventListeners() {
           miniWaveformRenderer?.clear();
           if (miniWaveformCanvas) miniWaveformCanvas.style.display = "none";
         }
-      }
-    );
-  }
-
-  // PTT events
-  if (!pttPressedUnlisten) {
-    pttPressedUnlisten = await listen("ptt-pressed", () => {
-      console.log("[PTT] Key pressed");
-      isPttActive = true;
-      updatePttIndicator();
-    });
-  }
-
-  if (!pttReleasedUnlisten) {
-    pttReleasedUnlisten = await listen("ptt-released", () => {
-      console.log("[PTT] Key released");
-      isPttActive = false;
-      updatePttIndicator();
-    });
-  }
-
-  // Mode changed
-  if (!transcriptionModeChangedUnlisten) {
-    transcriptionModeChangedUnlisten = await listen<TranscriptionMode>(
-      "transcription-mode-changed",
-      (event) => {
-        console.log("[Mode] Changed to:", event.payload);
-        transcriptionMode = event.payload;
-        updatePttIndicator();
-        updateStatusDisplay();
       }
     );
   }
@@ -325,23 +190,8 @@ function cleanupEventListeners() {
   transcriptionErrorUnlisten?.();
   transcriptionErrorUnlisten = null;
   
-  speechStartedUnlisten?.();
-  speechStartedUnlisten = null;
-  
-  speechEndedUnlisten?.();
-  speechEndedUnlisten = null;
-  
   captureStateChangedUnlisten?.();
   captureStateChangedUnlisten = null;
-  
-  pttPressedUnlisten?.();
-  pttPressedUnlisten = null;
-  
-  pttReleasedUnlisten?.();
-  pttReleasedUnlisten = null;
-  
-  transcriptionModeChangedUnlisten?.();
-  transcriptionModeChangedUnlisten = null;
   
   historyEntryDeletedUnlisten?.();
   historyEntryDeletedUnlisten = null;
@@ -533,43 +383,6 @@ function playSegmentAudio(wavPath: string, btn: HTMLButtonElement): void {
   });
 }
 
-// ============== PTT and Mode Control ==============
-
-async function loadPttStatus() {
-  try {
-    const status = await invoke<PttStatus>("get_ptt_status");
-    transcriptionMode = status.mode;
-    pttHotkeys = status.hotkeys || [];
-    isPttActive = status.is_active;
-    
-    console.log(`PTT status: mode=${transcriptionMode}, hotkeys=${pttHotkeys.length}`);
-    updatePttIndicator();
-    
-    if (status.error) {
-      console.warn("PTT error:", status.error);
-    }
-  } catch (error) {
-    console.error("Failed to load PTT status:", error);
-  }
-}
-
-function updatePttIndicator() {
-  if (pttIndicator) {
-    if (transcriptionMode === "push_to_talk" && isPttActive) {
-      pttIndicator.classList.remove("hidden");
-      pttIndicator.classList.add("active");
-      pttIndicator.title = `PTT Active (${hotkeysDisplaySummary(pttHotkeys)} held)`;
-    } else if (transcriptionMode === "push_to_talk") {
-      pttIndicator.classList.remove("hidden");
-      pttIndicator.classList.remove("active");
-      pttIndicator.title = `PTT Ready (press ${hotkeysDisplaySummary(pttHotkeys)} to speak)`;
-    } else {
-      pttIndicator.classList.add("hidden");
-      pttIndicator.classList.remove("active");
-    }
-  }
-}
-
 // ============== CUDA Status ==============
 
 async function checkCudaStatus() {
@@ -634,6 +447,72 @@ async function openVisualizationWindow() {
   });
 }
 
+async function openAboutWindow() {
+  const existing = await WebviewWindow.getByLabel("about");
+  if (existing) {
+    const isVisible = await existing.isVisible();
+    if (isVisible) {
+      await existing.setFocus();
+    } else {
+      await existing.show();
+      await existing.setFocus();
+    }
+    return;
+  }
+
+  const aboutWindow = new WebviewWindow("about", {
+    url: "about.html",
+    title: "About FlowSTT",
+    width: 400,
+    height: 280,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    decorations: false,
+    transparent: true,
+    shadow: false,
+    skipTaskbar: true,
+    center: true,
+  });
+
+  aboutWindow.once("tauri://error", (e) => {
+    console.error("Failed to create about window:", e.payload);
+  });
+}
+
+async function openConfigWindow() {
+  const existing = await WebviewWindow.getByLabel("config");
+  if (existing) {
+    const isVisible = await existing.isVisible();
+    if (isVisible) {
+      await existing.setFocus();
+    } else {
+      await existing.show();
+      await existing.setFocus();
+    }
+    return;
+  }
+
+  const configWindow = new WebviewWindow("config", {
+    url: "config.html",
+    title: "FlowSTT Settings",
+    width: 480,
+    height: 460,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    decorations: false,
+    transparent: true,
+    shadow: false,
+    skipTaskbar: true,
+    center: true,
+  });
+
+  configWindow.once("tauri://error", (e) => {
+    console.error("Failed to create config window:", e.payload);
+  });
+}
+
 // ============== Initialization ==============
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -669,7 +548,6 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("keyup", suppressKeyHandler);
 
   // Get DOM elements
-  statusEl = document.querySelector("#status");
   historyContainer = document.querySelector("#history-container");
   modelWarning = document.querySelector("#model-warning");
   modelPathEl = document.querySelector("#model-path");
@@ -677,7 +555,6 @@ window.addEventListener("DOMContentLoaded", () => {
   downloadStatusEl = document.querySelector("#download-status");
   miniWaveformCanvas = document.querySelector("#mini-waveform");
   closeBtn = document.querySelector("#close-btn");
-  pttIndicator = document.querySelector("#ptt-indicator");
   cudaIndicator = document.querySelector("#cuda-indicator");
 
   // Initialize mini waveform renderer
@@ -700,6 +577,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Set up event handlers
   downloadModelBtn?.addEventListener("click", downloadModel);
+  document.querySelector("#about-btn")?.addEventListener("click", () => openAboutWindow());
+  document.querySelector("#config-btn")?.addEventListener("click", () => openConfigWindow());
   closeBtn?.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -726,9 +605,6 @@ async function initializeApp() {
 
   startupLog(`initializeApp started at ${performance.now().toFixed(0)}ms`);
 
-  // Set initial status
-  setStatus("Initializing...");
-  
   // Set up event listeners (must be done before connect_events so we
   // catch the synthetic CaptureStateChanged sent on subscribe)
   await setupEventListeners();
@@ -740,7 +616,7 @@ async function initializeApp() {
     startupLog(`connect_events done (+${elapsed()})`);
   } catch (error) {
     startupLog(`connect_events FAILED (+${elapsed()}): ${error}`);
-    setStatus(`Connection error: ${error}`, "error");
+    console.error(`Connection error: ${error}`);
     // Show window even on error so the user can see the error message
     const mainWindow = getCurrentWindow();
     await mainWindow.show();
@@ -756,12 +632,9 @@ async function initializeApp() {
     
     // Sync local state with service
     isCapturing = status.capturing;
-    inSpeechSegment = status.in_speech;
-    transcribeQueueDepth = status.queue_depth;
-    transcriptionMode = status.transcription_mode;
-    
+
     if (status.error) {
-      setStatus(`Error: ${status.error}`, "error");
+      console.error(`Service error: ${status.error}`);
     }
   } catch (error) {
     startupLog(`get_status FAILED (+${elapsed()}): ${error}`);
@@ -769,15 +642,11 @@ async function initializeApp() {
 
   checkModelStatus();
   checkCudaStatus();
-  loadPttStatus();
 
   // Load transcription history from service
   await loadHistory();
   startupLog(`loadHistory done (+${elapsed()})`);
-  
-  // Update status display based on synced state
-  updateStatusDisplay();
-  
+
   // If capturing, show and start waveform renderer
   if (isCapturing) {
     if (miniWaveformCanvas) miniWaveformCanvas.style.display = "block";
