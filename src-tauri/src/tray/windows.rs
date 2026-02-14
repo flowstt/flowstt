@@ -117,7 +117,7 @@ fn recreate_main_window(app: &tauri::AppHandle) {
             .resizable(true)
             .decorations(false)
             .transparent(true)
-            .shadow(false)
+            .shadow(true)
             .center()
             .build();
 
@@ -143,7 +143,7 @@ fn show_about_window(app: &tauri::AppHandle) {
         .minimizable(false)
         .decorations(false)
         .transparent(true)
-        .shadow(false)
+        .shadow(true)
         .skip_taskbar(true)
         .center()
         .build();
@@ -166,7 +166,7 @@ fn show_config_window(app: &tauri::AppHandle) {
         .minimizable(false)
         .decorations(false)
         .transparent(true)
-        .shadow(false)
+        .shadow(true)
         .skip_taskbar(true)
         .center()
         .build();

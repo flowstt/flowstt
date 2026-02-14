@@ -439,7 +439,7 @@ async function openVisualizationWindow() {
     resizable: true,
     decorations: false,
     transparent: true,
-    shadow: false,
+    shadow: true,
     center: true,
   });
 
@@ -471,7 +471,7 @@ async function openAboutWindow() {
     minimizable: false,
     decorations: false,
     transparent: true,
-    shadow: false,
+    shadow: true,
     skipTaskbar: true,
     center: true,
   });
@@ -504,7 +504,7 @@ async function openConfigWindow() {
     minimizable: false,
     decorations: false,
     transparent: true,
-    shadow: false,
+    shadow: true,
     skipTaskbar: true,
     center: true,
   });
