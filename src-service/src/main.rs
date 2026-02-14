@@ -103,15 +103,16 @@ fn main() {
     info!("FlowSTT Service starting (pid: {})...", std::process::id());
 
     // Load configuration from disk and apply to service state
-    let loaded_config = config::Config::load();
+    let loaded_config = config::load_config();
     {
         let state = state::get_service_state();
         let mut state = state.blocking_lock();
         state.transcription_mode = loaded_config.transcription_mode;
-        state.ptt_key = loaded_config.ptt_key;
+        state.ptt_hotkeys = loaded_config.ptt_hotkeys.clone();
         info!(
-            "Applied config: transcription_mode={:?}, ptt_key={:?}",
-            state.transcription_mode, state.ptt_key
+            "Applied config: transcription_mode={:?}, ptt_hotkeys={} combination(s)",
+            state.transcription_mode,
+            state.ptt_hotkeys.len()
         );
     }
 

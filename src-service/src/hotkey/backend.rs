@@ -1,6 +1,6 @@
 //! Platform-agnostic hotkey backend trait.
 
-use flowstt_common::KeyCode;
+use flowstt_common::HotkeyCombination;
 
 /// Event emitted when hotkey state changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,13 +17,13 @@ pub enum HotkeyEvent {
 /// push-to-talk hotkey. The backend runs on a separate thread and delivers
 /// events via a channel.
 pub trait HotkeyBackend: Send {
-    /// Start monitoring for the specified hotkey.
+    /// Start monitoring for the specified hotkey combinations.
     ///
     /// Returns an error if:
     /// - The platform doesn't support global hotkeys
     /// - Required permissions are not granted (e.g., Accessibility on macOS)
     /// - The backend is already running
-    fn start(&mut self, key: KeyCode) -> Result<(), String>;
+    fn start(&mut self, hotkeys: Vec<HotkeyCombination>) -> Result<(), String>;
 
     /// Stop monitoring for hotkey events.
     fn stop(&mut self);

@@ -3,7 +3,7 @@
 //! This module manages the shared state for the FlowSTT service,
 //! including transcription status and audio backend state.
 
-use flowstt_common::{KeyCode, RecordingMode, TranscribeStatus, TranscriptionMode};
+use flowstt_common::{HotkeyCombination, RecordingMode, TranscribeStatus, TranscriptionMode};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -22,8 +22,8 @@ pub struct ServiceState {
     pub source2_id: Option<String>,
     /// Current transcription mode (Automatic or PushToTalk)
     pub transcription_mode: TranscriptionMode,
-    /// Configured push-to-talk hotkey
-    pub ptt_key: KeyCode,
+    /// Configured push-to-talk hotkey combinations
+    pub ptt_hotkeys: Vec<HotkeyCombination>,
     /// Whether PTT key is currently pressed
     pub is_ptt_active: bool,
 }

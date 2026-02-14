@@ -81,6 +81,7 @@ body {
     flex-direction: column;
     gap: 16px;
     padding: 8px 24px 24px;
+    overflow-y: auto;
 }
 
 .config-field {
@@ -119,4 +120,122 @@ select {
 select option {
     background-color: #252d3a !important;
     color: #f6f6f6 !important;
+}
+
+/* === Hotkey Management === */
+
+.hotkey-field {
+    gap: 8px;
+}
+
+.hotkey-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.hotkey-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: #252d3a;
+    border: 1px solid #3a4555;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+.hotkey-label {
+    color: #f6f6f6;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hotkey-remove-btn {
+    width: 22px;
+    height: 22px;
+    min-width: unset;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #666;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 400;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+    margin-left: 8px;
+}
+
+.hotkey-remove-btn:hover {
+    color: #e55;
+    background: rgba(255, 80, 80, 0.1);
+}
+
+.hotkey-empty {
+    color: #555;
+    font-size: 0.8em;
+    font-style: italic;
+    padding: 6px 2px;
+}
+
+.hotkey-recorder {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    background: #1a2233;
+    border: 1px solid #4a7aaa;
+    border-radius: 4px;
+    animation: recorder-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes recorder-pulse {
+    0%, 100% { border-color: #4a7aaa; }
+    50% { border-color: #6a9acc; }
+}
+
+.recorder-status {
+    color: #8ac;
+    font-size: 0.85em;
+    font-weight: 500;
+}
+
+.add-hotkey-btn {
+    padding: 6px 12px;
+    font-size: 0.8em;
+    border-radius: 4px;
+    border: 1px solid #3a4555;
+    background: #252d3a;
+    color: #9ca3af;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    text-align: center;
+}
+
+.add-hotkey-btn:hover {
+    color: #d0d0d0;
+    border-color: #5a6a7a;
+    background: #2a3444;
+}
+
+.add-hotkey-btn:active {
+    background: #1e2a38;
+}
+
+.hotkey-warning {
+    color: #d4a04a;
+    font-size: 0.75em;
+    padding: 4px 2px;
+    line-height: 1.3;
+}
+
+.hidden {
+    display: none !important;
 }

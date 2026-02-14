@@ -1,8 +1,5 @@
-# config-window Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-config-window. Update Purpose after archive.
-## Requirements
 ### Requirement: Configuration Window
 The system SHALL provide a configuration window for adjusting audio and input settings. The window is accessible from the system tray context menu. The window SHALL be sized to accommodate the hotkey management interface.
 
@@ -30,39 +27,6 @@ The system SHALL provide a configuration window for adjusting audio and input se
 - **WHEN** the user clicks the close button
 - **THEN** the configuration window closes
 - **AND** the main application continues running
-
-### Requirement: Input Device Configuration
-The configuration window SHALL display a dropdown for selecting the primary audio input device, populated with the same device list as the main window.
-
-#### Scenario: Input device dropdown populated on open
-- **WHEN** the configuration window opens
-- **THEN** the primary input device dropdown is populated with all available audio devices
-- **AND** the currently selected device is pre-selected in the dropdown
-
-#### Scenario: Input device changed in config window
-- **WHEN** the user selects a different primary input device in the configuration window
-- **THEN** the change takes effect immediately without requiring a save action
-- **AND** the audio capture switches to the newly selected device
-
-#### Scenario: No devices available
-- **WHEN** no audio devices are detected
-- **THEN** the dropdown displays a "None" option and no device is selected
-
-### Requirement: Reference Input Configuration
-The configuration window SHALL display a dropdown for selecting the reference/system audio input device, populated with the same device list as the main window.
-
-#### Scenario: Reference input dropdown populated on open
-- **WHEN** the configuration window opens
-- **THEN** the reference input dropdown is populated with all available audio devices
-- **AND** the currently selected reference device is pre-selected (or "None" if no reference is set)
-
-#### Scenario: Reference input changed in config window
-- **WHEN** the user selects a different reference input device in the configuration window
-- **THEN** the change takes effect immediately without requiring a save action
-
-#### Scenario: Reference input set to None
-- **WHEN** the user selects "None" for the reference input
-- **THEN** the system audio reference source is cleared
 
 ### Requirement: PTT Key Configuration
 The configuration window SHALL provide a hotkey management interface for recording, displaying, and managing multiple push-to-talk hotkey bindings. The PTT key dropdown is replaced by a hotkey recorder and binding list.
@@ -112,4 +76,3 @@ The configuration window SHALL provide a hotkey management interface for recordi
 - **WHEN** all hotkey bindings have been removed
 - **THEN** the list area displays a message indicating no hotkeys are configured
 - **AND** push-to-talk is inactive until a binding is added
-

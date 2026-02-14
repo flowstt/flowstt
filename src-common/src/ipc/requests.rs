@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{AudioSourceType, KeyCode, RecordingMode, TranscriptionMode};
+use crate::types::{AudioSourceType, HotkeyCombination, RecordingMode, TranscriptionMode};
 
 /// IPC request from client to service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,16 +47,20 @@ pub enum Request {
     /// Get CUDA/GPU acceleration status
     GetCudaStatus,
 
+    // === Configuration ===
+    /// Get all persisted configuration values
+    GetConfig,
+
     // === Transcription Mode Control ===
     /// Set the transcription mode (Automatic or PushToTalk)
     SetTranscriptionMode {
         /// The transcription mode to set
         mode: TranscriptionMode,
     },
-    /// Set the push-to-talk hotkey
-    SetPushToTalkKey {
-        /// The key code to use for PTT
-        key: KeyCode,
+    /// Set the push-to-talk hotkey combinations
+    SetPushToTalkHotkeys {
+        /// The hotkey combinations to use for PTT
+        hotkeys: Vec<HotkeyCombination>,
     },
     /// Get the current PTT status
     GetPttStatus,

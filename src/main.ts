@@ -38,37 +38,48 @@ interface CaptureStatus {
 // Transcription mode matching backend
 type TranscriptionMode = "automatic" | "push_to_talk";
 
-// Key codes for PTT hotkey
-type KeyCode = "right_alt" | "left_alt" | "right_control" | "left_control" | 
-               "right_shift" | "left_shift" | "caps_lock" | 
-               "f13" | "f14" | "f15" | "f16" | "f17" | "f18" | "f19" | "f20";
+interface HotkeyCombination {
+  keys: string[];
+}
 
 interface PttStatus {
   mode: TranscriptionMode;
-  key: KeyCode;
+  hotkeys: HotkeyCombination[];
   is_active: boolean;
   available: boolean;
   error: string | null;
 }
 
-// Key code display names
-const KEY_CODE_NAMES: Record<KeyCode, string> = {
-  right_alt: "Right Alt",
-  left_alt: "Left Alt",
-  right_control: "Right Control",
-  left_control: "Left Control",
-  right_shift: "Right Shift",
-  left_shift: "Left Shift",
-  caps_lock: "Caps Lock",
-  f13: "F13",
-  f14: "F14",
-  f15: "F15",
-  f16: "F16",
-  f17: "F17",
-  f18: "F18",
-  f19: "F19",
-  f20: "F20",
+// Key code display names (subset for main window display)
+const KEY_DISPLAY_NAMES: Record<string, string> = {
+  right_alt: "Right Alt", left_alt: "Left Alt",
+  right_control: "Right Ctrl", left_control: "Left Ctrl",
+  right_shift: "Right Shift", left_shift: "Left Shift",
+  caps_lock: "Caps Lock", left_meta: "Left Win", right_meta: "Right Win",
+  f1: "F1", f2: "F2", f3: "F3", f4: "F4", f5: "F5", f6: "F6",
+  f7: "F7", f8: "F8", f9: "F9", f10: "F10", f11: "F11", f12: "F12",
+  f13: "F13", f14: "F14", f15: "F15", f16: "F16", f17: "F17", f18: "F18",
+  f19: "F19", f20: "F20", f21: "F21", f22: "F22", f23: "F23", f24: "F24",
+  key_a: "A", key_b: "B", key_c: "C", key_d: "D", key_e: "E", key_f: "F",
+  key_g: "G", key_h: "H", key_i: "I", key_j: "J", key_k: "K", key_l: "L",
+  key_m: "M", key_n: "N", key_o: "O", key_p: "P", key_q: "Q", key_r: "R",
+  key_s: "S", key_t: "T", key_u: "U", key_v: "V", key_w: "W", key_x: "X",
+  key_y: "Y", key_z: "Z",
+  digit0: "0", digit1: "1", digit2: "2", digit3: "3", digit4: "4",
+  digit5: "5", digit6: "6", digit7: "7", digit8: "8", digit9: "9",
+  space: "Space", tab: "Tab", enter: "Enter", escape: "Esc",
+  backspace: "Backspace",
 };
+
+function hotkeyDisplayName(combo: HotkeyCombination): string {
+  return combo.keys.map(k => KEY_DISPLAY_NAMES[k] || k).join(" + ");
+}
+
+function hotkeysDisplaySummary(hotkeys: HotkeyCombination[]): string {
+  if (hotkeys.length === 0) return "None";
+  if (hotkeys.length === 1) return hotkeyDisplayName(hotkeys[0]);
+  return `${hotkeyDisplayName(hotkeys[0])} (+${hotkeys.length - 1} more)`;
+}
 
 // DOM elements
 let statusEl: HTMLElement | null;
@@ -86,7 +97,7 @@ let isCapturing = false;
 let inSpeechSegment = false;
 let transcribeQueueDepth = 0;
 let transcriptionMode: TranscriptionMode = "push_to_talk";
-let pttKey: KeyCode = "right_alt";
+let pttHotkeys: HotkeyCombination[] = [{ keys: ["right_alt"] }];
 let isPttActive = false;
 
 // Event listeners
@@ -168,7 +179,7 @@ function updateStatusDisplay() {
     statusText = `Listening... (${transcribeQueueDepth} pending)`;
   } else {
     const modeText = transcriptionMode === "push_to_talk" 
-      ? `PTT Ready (${KEY_CODE_NAMES[pttKey]})`
+      ? `PTT Ready (${hotkeysDisplaySummary(pttHotkeys)})`
       : "Auto (VAD)";
     statusText = `Listening... [${modeText}]`;
   }
@@ -395,10 +406,10 @@ async function loadPttStatus() {
   try {
     const status = await invoke<PttStatus>("get_ptt_status");
     transcriptionMode = status.mode;
-    pttKey = status.key;
+    pttHotkeys = status.hotkeys || [];
     isPttActive = status.is_active;
     
-    console.log(`PTT status: mode=${transcriptionMode}, key=${pttKey}`);
+    console.log(`PTT status: mode=${transcriptionMode}, hotkeys=${pttHotkeys.length}`);
     updatePttIndicator();
     
     if (status.error) {
@@ -414,11 +425,11 @@ function updatePttIndicator() {
     if (transcriptionMode === "push_to_talk" && isPttActive) {
       pttIndicator.classList.remove("hidden");
       pttIndicator.classList.add("active");
-      pttIndicator.title = `PTT Active (${KEY_CODE_NAMES[pttKey]} held)`;
+      pttIndicator.title = `PTT Active (${hotkeysDisplaySummary(pttHotkeys)} held)`;
     } else if (transcriptionMode === "push_to_talk") {
       pttIndicator.classList.remove("hidden");
       pttIndicator.classList.remove("active");
-      pttIndicator.title = `PTT Ready (press ${KEY_CODE_NAMES[pttKey]} to speak)`;
+      pttIndicator.title = `PTT Ready (press ${hotkeysDisplaySummary(pttHotkeys)} to speak)`;
     } else {
       pttIndicator.classList.add("hidden");
       pttIndicator.classList.remove("active");

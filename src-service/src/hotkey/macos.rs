@@ -4,7 +4,7 @@
 //! global keyboard events. It requires Accessibility permission to function.
 
 use super::backend::{HotkeyBackend, HotkeyEvent};
-use flowstt_common::KeyCode;
+use flowstt_common::{HotkeyCombination, KeyCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -30,7 +30,8 @@ mod keycode {
     pub const F20: u16 = 0x5A; // 90
 }
 
-/// Convert KeyCode to macOS virtual key code
+/// Convert KeyCode to macOS virtual key code.
+/// Returns 0xFFFF for keys not yet mapped on macOS.
 fn keycode_to_macos(key: KeyCode) -> u16 {
     match key {
         KeyCode::RightAlt => keycode::RIGHT_OPTION,
@@ -48,6 +49,8 @@ fn keycode_to_macos(key: KeyCode) -> u16 {
         KeyCode::F18 => keycode::F18,
         KeyCode::F19 => keycode::F19,
         KeyCode::F20 => keycode::F20,
+        // TODO: Map remaining keys when macOS backend gets full combination support
+        _ => 0xFFFF,
     }
 }
 
@@ -109,10 +112,17 @@ impl MacOSHotkeyBackend {
 }
 
 impl HotkeyBackend for MacOSHotkeyBackend {
-    fn start(&mut self, key: KeyCode) -> Result<(), String> {
+    fn start(&mut self, hotkeys: Vec<HotkeyCombination>) -> Result<(), String> {
         if self.running.load(Ordering::SeqCst) {
             return Err("Hotkey backend already running".to_string());
         }
+
+        // macOS backend: for now, use the first key of the first combination
+        // (full combination support to be implemented later)
+        let key = hotkeys
+            .first()
+            .and_then(|h| h.keys.first().copied())
+            .unwrap_or_default();
 
         // Check accessibility permission, prompt if not granted
         if !Self::check_accessibility_permission() {

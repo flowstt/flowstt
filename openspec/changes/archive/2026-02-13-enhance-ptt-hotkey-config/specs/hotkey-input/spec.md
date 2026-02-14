@@ -1,8 +1,5 @@
-# hotkey-input Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-push-to-talk. Update Purpose after archive.
-## Requirements
 ### Requirement: Global Hotkey Backend Interface
 The system SHALL provide a platform-agnostic interface for global hotkey capture through a `HotkeyBackend` trait. Platform-specific implementations SHALL implement this trait, enabling push-to-talk functionality across supported platforms. The backend SHALL support monitoring multiple hotkey combinations simultaneously.
 
@@ -50,40 +47,6 @@ The system SHALL provide a fully functional hotkey backend for macOS using the C
 #### Scenario: macOS backend stops cleanly
 - **WHEN** the hotkey backend stop() is called
 - **THEN** the CGEventTap is disabled and the run loop exits
-
-### Requirement: macOS Accessibility Permission
-The system SHALL require Accessibility permission for global hotkey capture on macOS and provide clear feedback when permission is missing.
-
-#### Scenario: Permission check on startup
-- **WHEN** the hotkey backend attempts to start on macOS
-- **THEN** the system checks for Accessibility permission before creating the CGEventTap
-
-#### Scenario: Permission denied error
-- **WHEN** Accessibility permission is not granted
-- **THEN** the backend returns an error indicating Accessibility permission is required
-
-#### Scenario: Permission granted allows monitoring
-- **WHEN** Accessibility permission has been granted
-- **THEN** global key monitoring proceeds normally
-
-#### Scenario: Permission prompt guidance
-- **WHEN** the system detects missing Accessibility permission
-- **THEN** an error message includes instructions to enable it in System Preferences > Security & Privacy > Privacy > Accessibility
-
-### Requirement: Linux Hotkey Backend (Stub)
-The system SHALL provide a stub hotkey backend for Linux that compiles cleanly but returns appropriate errors indicating the feature is not yet implemented.
-
-#### Scenario: Linux backend compiles
-- **WHEN** the application is compiled on Linux
-- **THEN** compilation succeeds using the stub backend
-
-#### Scenario: Linux backend returns not-implemented error
-- **WHEN** the hotkey backend start() is called on Linux
-- **THEN** an error is returned indicating push-to-talk is not yet available on Linux
-
-#### Scenario: Linux backend try_recv returns None
-- **WHEN** try_recv() is called on the Linux stub backend
-- **THEN** None is returned (no events)
 
 ### Requirement: Hotkey Configuration
 The system SHALL allow configuration of one or more push-to-talk hotkey bindings, each of which is a combination of one or more simultaneously-held keys. A sensible default SHALL be provided for each platform.
@@ -156,6 +119,14 @@ The system SHALL use platform-independent key code representation for configurin
 - **WHEN** a hotkey combination is serialized
 - **THEN** it is represented as an object with a `keys` array of key code strings
 
+## REMOVED Requirements
+
+### Requirement: Windows Hotkey Backend (Stub)
+**Reason**: The Windows backend is no longer a stub. It has been fully implemented using the Raw Input API. This stub requirement is replaced by the new "Windows Hotkey Backend (Raw Input)" requirement under ADDED.
+**Migration**: See the ADDED "Windows Hotkey Backend (Raw Input)" requirement below.
+
+## ADDED Requirements
+
 ### Requirement: Hotkey Combination Type
 The system SHALL provide a `HotkeyCombination` type representing a set of keys that must all be held simultaneously to trigger PTT.
 
@@ -204,4 +175,3 @@ The system SHALL provide a hotkey backend for Windows using the Raw Input API, s
 #### Scenario: Windows backend stops cleanly
 - **WHEN** the hotkey backend stop() is called
 - **THEN** the Raw Input registration is removed and the message loop exits
-

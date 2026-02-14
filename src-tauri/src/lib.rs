@@ -7,7 +7,7 @@ mod ipc_client;
 mod tray;
 
 use flowstt_common::ipc::{Request, Response};
-use flowstt_common::{AudioDevice, KeyCode, RecordingMode, TranscriptionMode};
+use flowstt_common::{AudioDevice, HotkeyCombination, RecordingMode, TranscriptionMode};
 use ipc_client::{IpcClient, SharedIpcClient};
 use std::env;
 use std::sync::Arc;
@@ -216,7 +216,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<LocalStatus, String> {
 #[derive(serde::Serialize)]
 struct LocalPttStatus {
     mode: TranscriptionMode,
-    key: KeyCode,
+    hotkeys: Vec<HotkeyCombination>,
     is_active: bool,
     available: bool,
     error: Option<String>,
@@ -237,10 +237,14 @@ async fn set_transcription_mode(
     }
 }
 
-/// Set the push-to-talk hotkey
+/// Set the push-to-talk hotkey combinations
 #[tauri::command]
-async fn set_ptt_key(key: KeyCode, state: State<'_, AppState>) -> Result<(), String> {
-    let response = send_request(&state.ipc, Request::SetPushToTalkKey { key }).await?;
+async fn set_ptt_hotkeys(
+    hotkeys: Vec<HotkeyCombination>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let response =
+        send_request(&state.ipc, Request::SetPushToTalkHotkeys { hotkeys }).await?;
 
     match response {
         Response::Ok => Ok(()),
@@ -257,7 +261,7 @@ async fn get_ptt_status(state: State<'_, AppState>) -> Result<LocalPttStatus, St
     match response {
         Response::PttStatus(status) => Ok(LocalPttStatus {
             mode: status.mode,
-            key: status.key,
+            hotkeys: status.hotkeys,
             is_active: status.is_active,
             available: status.available,
             error: status.error,
@@ -418,7 +422,7 @@ pub fn run() {
             get_status,
             get_cuda_status,
             set_transcription_mode,
-            set_ptt_key,
+            set_ptt_hotkeys,
             get_ptt_status,
             connect_events,
         ])

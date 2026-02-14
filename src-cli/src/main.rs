@@ -7,8 +7,9 @@ mod client;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
+use flowstt_common::config::Config;
 use flowstt_common::ipc::{EventType, Request, Response};
-use flowstt_common::{AudioSourceType, RecordingMode, TranscriptionMode};
+use flowstt_common::{AudioSourceType, ConfigValues, HotkeyCombination, RecordingMode, TranscriptionMode};
 
 use client::Client;
 
@@ -84,6 +85,13 @@ enum Commands {
     /// Show GPU/CUDA acceleration status
     Gpu,
 
+    /// Read or write persisted configuration values
+    #[command(alias = "cfg")]
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Ping the service
     Ping,
 
@@ -112,23 +120,87 @@ enum ModelAction {
     Download,
 }
 
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Display all persisted configuration values
+    Show,
+
+    /// Get the value of a configuration key
+    Get {
+        /// Configuration key (transcription_mode, ptt_hotkeys)
+        key: String,
+    },
+
+    /// Set the value of a configuration key
+    Set {
+        /// Configuration key (transcription_mode, ptt_hotkeys)
+        key: String,
+
+        /// Value to set (e.g. "automatic", "push_to_talk", or JSON for ptt_hotkeys)
+        value: String,
+    },
+}
+
+/// Valid configuration key names.
+const VALID_CONFIG_KEYS: &[&str] = &["transcription_mode", "ptt_hotkeys"];
+
+/// Error with an associated exit code.
+struct CliError {
+    message: String,
+    exit_code: i32,
+}
+
+impl CliError {
+    fn new(message: impl Into<String>, exit_code: i32) -> Self {
+        Self {
+            message: message.into(),
+            exit_code,
+        }
+    }
+
+    fn general(message: impl Into<String>) -> Self {
+        Self::new(message, 1)
+    }
+
+    fn usage(message: impl Into<String>) -> Self {
+        Self::new(message, 64)
+    }
+}
+
+impl From<String> for CliError {
+    fn from(message: String) -> Self {
+        Self::general(message)
+    }
+}
+
+impl From<&str> for CliError {
+    fn from(message: &str) -> Self {
+        Self::general(message.to_string())
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli).await {
-        eprintln!("{}: {}", "Error".red().bold(), e);
-        std::process::exit(1);
+        eprintln!("{}: {}", "Error".red().bold(), e.message);
+        std::process::exit(e.exit_code);
     }
 }
 
-async fn run(cli: Cli) -> Result<(), String> {
+async fn run(cli: Cli) -> Result<(), CliError> {
     let mut client = Client::new();
 
     // Handle version separately (doesn't need service)
     if matches!(cli.command, Commands::Version) {
         println!("flowstt {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+
+    // Handle config commands (can work offline)
+    if let Commands::Config { ref action } = cli.command {
+        return handle_config(&mut client, action, &cli).await;
     }
 
     // Connect to service (spawn if needed)
@@ -176,7 +248,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                         }
                     }
                 }
-                Response::Error { message } => return Err(message),
+                Response::Error { message } => return Err(message.into()),
                 _ => return Err("Unexpected response".into()),
             }
         }
@@ -305,7 +377,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                         }
                     }
                 }
-                Response::Error { message } => return Err(message),
+                Response::Error { message } => return Err(message.into()),
                 _ => return Err("Unexpected response".into()),
             }
         }
@@ -356,7 +428,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                         }
                     }
                 }
-                Response::Error { message } => return Err(message),
+                Response::Error { message } => return Err(message.into()),
                 _ => return Err("Unexpected response".into()),
             }
         }
@@ -377,7 +449,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                         println!("{}", "Capture stopped".green());
                     }
                 }
-                Response::Error { message } => return Err(message),
+                Response::Error { message } => return Err(message.into()),
                 _ => return Err("Unexpected response".into()),
             }
         }
@@ -404,7 +476,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                             if message.contains("already downloaded") {
                                 println!("{}", "Model already downloaded".yellow());
                             } else {
-                                return Err(message);
+                                return Err(message.into());
                             }
                         }
                         _ => return Err("Unexpected response".into()),
@@ -438,7 +510,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                                 }
                             }
                         }
-                        Response::Error { message } => return Err(message),
+                        Response::Error { message } => return Err(message.into()),
                         _ => return Err("Unexpected response".into()),
                     }
                 }
@@ -474,7 +546,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                         println!("  {}", status.system_info.dimmed());
                     }
                 }
-                Response::Error { message } => return Err(message),
+                Response::Error { message } => return Err(message.into()),
                 _ => return Err("Unexpected response".into()),
             }
         }
@@ -488,7 +560,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                 }
             }
             Ok(false) => return Err("Service not responding".into()),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.to_string().into()),
         },
 
         Commands::Shutdown => {
@@ -503,15 +575,247 @@ async fn run(cli: Cli) -> Result<(), String> {
                         println!("{}", "Service shutdown initiated".green());
                     }
                 }
-                Response::Error { message } => return Err(message),
+                Response::Error { message } => return Err(message.into()),
                 _ => return Err("Unexpected response".into()),
             }
+        }
+
+        Commands::Config { .. } => {
+            // Already handled above
+            unreachable!()
         }
 
         Commands::Version => {
             // Already handled above
             unreachable!()
         }
+    }
+
+    Ok(())
+}
+
+/// Handle config subcommands. Tries IPC first, falls back to direct file access.
+async fn handle_config(
+    client: &mut Client,
+    action: &ConfigAction,
+    cli: &Cli,
+) -> Result<(), CliError> {
+    match action {
+        ConfigAction::Show => handle_config_show(client, cli).await,
+        ConfigAction::Get { key } => handle_config_get(client, key, cli).await,
+        ConfigAction::Set { key, value } => handle_config_set(client, key, value, cli).await,
+    }
+}
+
+/// Retrieve config values from the service or fall back to the config file.
+async fn get_config_values(client: &mut Client) -> Result<ConfigValues, CliError> {
+    // Try connecting to the service
+    if client.connect().await.is_ok() {
+        let response = client
+            .request(Request::GetConfig)
+            .await
+            .map_err(|e| e.to_string())?;
+        match response {
+            Response::ConfigValues(values) => return Ok(values),
+            Response::Error { message } => return Err(CliError::general(message)),
+            _ => return Err(CliError::general("Unexpected response from service")),
+        }
+    }
+
+    // Service not running -- read from disk
+    let config = Config::load();
+    Ok(ConfigValues {
+        transcription_mode: config.transcription_mode,
+        ptt_hotkeys: config.ptt_hotkeys,
+    })
+}
+
+/// Validate that a config key name is recognized.
+fn validate_config_key(key: &str) -> Result<(), CliError> {
+    if VALID_CONFIG_KEYS.contains(&key) {
+        Ok(())
+    } else {
+        Err(CliError::usage(format!(
+            "Unknown configuration key '{}'. Valid keys: {}",
+            key,
+            VALID_CONFIG_KEYS.join(", ")
+        )))
+    }
+}
+
+/// Format hotkeys for human-readable display.
+fn format_hotkeys_display(hotkeys: &[HotkeyCombination]) -> String {
+    if hotkeys.is_empty() {
+        "(none)".to_string()
+    } else {
+        hotkeys
+            .iter()
+            .map(|h| h.display())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// Handle `config show` -- display all config values.
+async fn handle_config_show(client: &mut Client, cli: &Cli) -> Result<(), CliError> {
+    let values = get_config_values(client).await?;
+
+    if matches!(cli.format, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&values).map_err(|e| e.to_string())?
+        );
+    } else {
+        let mode_str = match values.transcription_mode {
+            TranscriptionMode::Automatic => "automatic",
+            TranscriptionMode::PushToTalk => "push_to_talk",
+        };
+        println!("{}: {}", "transcription_mode".bold(), mode_str);
+        println!(
+            "{}: {}",
+            "ptt_hotkeys".bold(),
+            format_hotkeys_display(&values.ptt_hotkeys)
+        );
+    }
+
+    Ok(())
+}
+
+/// Handle `config get <key>` -- display a single config value.
+async fn handle_config_get(
+    client: &mut Client,
+    key: &str,
+    cli: &Cli,
+) -> Result<(), CliError> {
+    validate_config_key(key)?;
+
+    let values = get_config_values(client).await?;
+
+    match key {
+        "transcription_mode" => {
+            if matches!(cli.format, OutputFormat::Json) {
+                println!(
+                    "{}",
+                    serde_json::to_value(&values.transcription_mode)
+                        .map_err(|e| e.to_string())?
+                );
+            } else {
+                let mode_str = match values.transcription_mode {
+                    TranscriptionMode::Automatic => "automatic",
+                    TranscriptionMode::PushToTalk => "push_to_talk",
+                };
+                println!("{}", mode_str);
+            }
+        }
+        "ptt_hotkeys" => {
+            if matches!(cli.format, OutputFormat::Json) {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&values.ptt_hotkeys)
+                        .map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("{}", format_hotkeys_display(&values.ptt_hotkeys));
+            }
+        }
+        _ => unreachable!(), // validate_config_key already checked
+    }
+
+    Ok(())
+}
+
+/// Handle `config set <key> <value>` -- update a config value.
+async fn handle_config_set(
+    client: &mut Client,
+    key: &str,
+    value: &str,
+    cli: &Cli,
+) -> Result<(), CliError> {
+    validate_config_key(key)?;
+
+    // Try connecting to the service first
+    let service_available = client.connect().await.is_ok();
+
+    match key {
+        "transcription_mode" => {
+            let mode = match value {
+                "automatic" => TranscriptionMode::Automatic,
+                "push_to_talk" => TranscriptionMode::PushToTalk,
+                _ => {
+                    return Err(CliError::usage(format!(
+                        "Invalid value '{}' for transcription_mode. Expected: automatic, push_to_talk",
+                        value
+                    )));
+                }
+            };
+
+            if service_available {
+                let response = client
+                    .request(Request::SetTranscriptionMode { mode })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                match response {
+                    Response::Ok => {}
+                    Response::Error { message } => return Err(CliError::general(message)),
+                    _ => return Err(CliError::general("Unexpected response")),
+                }
+            } else {
+                // Offline: write directly to config file
+                let mut config = Config::load();
+                config.transcription_mode = mode;
+                config
+                    .save()
+                    .map_err(|e| CliError::general(format!("Failed to save config: {}", e)))?;
+            }
+
+            if !cli.quiet {
+                println!(
+                    "{} transcription_mode = {}",
+                    "Set".green().bold(),
+                    value
+                );
+            }
+        }
+        "ptt_hotkeys" => {
+            let hotkeys: Vec<HotkeyCombination> =
+                serde_json::from_str(value).map_err(|e| {
+                    CliError::usage(format!(
+                        "Invalid JSON for ptt_hotkeys: {}\nExpected format: {}",
+                        e,
+                        r#"'[{"keys":["left_control","left_alt"]}]'"#
+                    ))
+                })?;
+
+            if service_available {
+                let response = client
+                    .request(Request::SetPushToTalkHotkeys {
+                        hotkeys: hotkeys.clone(),
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                match response {
+                    Response::Ok => {}
+                    Response::Error { message } => return Err(CliError::general(message)),
+                    _ => return Err(CliError::general("Unexpected response")),
+                }
+            } else {
+                // Offline: write directly to config file
+                let mut config = Config::load();
+                config.ptt_hotkeys = hotkeys.clone();
+                config
+                    .save()
+                    .map_err(|e| CliError::general(format!("Failed to save config: {}", e)))?;
+            }
+
+            if !cli.quiet {
+                println!(
+                    "{} ptt_hotkeys = {}",
+                    "Set".green().bold(),
+                    format_hotkeys_display(&hotkeys)
+                );
+            }
+        }
+        _ => unreachable!(), // validate_config_key already checked
     }
 
     Ok(())

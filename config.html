@@ -25,11 +25,16 @@
                     <option value="">Loading...</option>
                 </select>
             </div>
-            <div class="config-field">
-                <label for="ptt-key-select">Push-to-Talk Key</label>
-                <select id="ptt-key-select">
+            <div class="config-field hotkey-field">
+                <label>Push-to-Talk Hotkeys</label>
+                <div id="hotkey-list" class="hotkey-list">
                     <!-- Populated by JavaScript -->
-                </select>
+                </div>
+                <div id="hotkey-recorder" class="hotkey-recorder hidden">
+                    <span id="recorder-status" class="recorder-status">Press keys...</span>
+                </div>
+                <div id="hotkey-warning" class="hotkey-warning hidden"></div>
+                <button id="add-hotkey-btn" class="add-hotkey-btn" type="button">+ Add Hotkey</button>
             </div>
         </div>
     </div>

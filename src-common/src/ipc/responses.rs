@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    AudioDevice, CudaStatus, ModelStatus, PttStatus, TranscribeStatus, TranscriptionResult,
-    VisualizationData,
+    AudioDevice, ConfigValues, CudaStatus, ModelStatus, PttStatus, TranscribeStatus,
+    TranscriptionResult, VisualizationData,
 };
 
 /// IPC response from service to client.
@@ -26,6 +26,9 @@ pub enum Response {
 
     /// Push-to-talk status
     PttStatus(PttStatus),
+
+    /// Persisted configuration values
+    ConfigValues(ConfigValues),
 
     /// Subscribed to events
     Subscribed,

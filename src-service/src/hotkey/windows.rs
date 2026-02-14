@@ -2,10 +2,12 @@
 //!
 //! This implementation uses the Windows Raw Input API to monitor global keyboard
 //! events even when the application window is not focused. It creates a hidden
-//! message-only window to receive WM_INPUT messages.
+//! message-only window to receive WM_INPUT messages. Supports tracking multiple
+//! key combinations simultaneously.
 
 use super::backend::{HotkeyBackend, HotkeyEvent};
-use flowstt_common::KeyCode;
+use flowstt_common::{HotkeyCombination, KeyCode};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -26,30 +28,31 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const RI_KEY_BREAK: u16 = 1; // Key up (break) flag
 const RI_KEY_E0: u16 = 2; // Extended key flag
 
-/// Windows virtual key codes for PTT keys
-/// Note: Raw Input uses generic VK codes (VK_MENU, VK_CONTROL, VK_SHIFT) with
-/// the RI_KEY_E0 flag to distinguish left/right keys.
+/// Windows virtual key codes
 mod vk {
     // Generic modifier keys (used in Raw Input)
     pub const MENU: u16 = 0x12; // VK_MENU (Alt)
     pub const CONTROL: u16 = 0x11; // VK_CONTROL
     pub const SHIFT: u16 = 0x10; // VK_SHIFT
 
-    // Specific modifier keys (for reference, but Raw Input uses generic + E0 flag)
-    #[allow(dead_code)]
-    pub const RIGHT_ALT: u16 = 0xA5; // VK_RMENU
-    #[allow(dead_code)]
-    pub const LEFT_ALT: u16 = 0xA4; // VK_LMENU
-    #[allow(dead_code)]
-    pub const RIGHT_CONTROL: u16 = 0xA3; // VK_RCONTROL
-    #[allow(dead_code)]
-    pub const LEFT_CONTROL: u16 = 0xA2; // VK_LCONTROL
-    #[allow(dead_code)]
-    pub const RIGHT_SHIFT: u16 = 0xA1; // VK_RSHIFT
-    #[allow(dead_code)]
-    pub const LEFT_SHIFT: u16 = 0xA0; // VK_LSHIFT
+    pub const LWIN: u16 = 0x5B; // VK_LWIN
+    pub const RWIN: u16 = 0x5C; // VK_RWIN
 
     pub const CAPS_LOCK: u16 = 0x14; // VK_CAPITAL
+
+    // Function keys
+    pub const F1: u16 = 0x70;
+    pub const F2: u16 = 0x71;
+    pub const F3: u16 = 0x72;
+    pub const F4: u16 = 0x73;
+    pub const F5: u16 = 0x74;
+    pub const F6: u16 = 0x75;
+    pub const F7: u16 = 0x76;
+    pub const F8: u16 = 0x77;
+    pub const F9: u16 = 0x78;
+    pub const F10: u16 = 0x79;
+    pub const F11: u16 = 0x7A;
+    pub const F12: u16 = 0x7B;
     pub const F13: u16 = 0x7C;
     pub const F14: u16 = 0x7D;
     pub const F15: u16 = 0x7E;
@@ -58,28 +61,232 @@ mod vk {
     pub const F18: u16 = 0x81;
     pub const F19: u16 = 0x82;
     pub const F20: u16 = 0x83;
+    pub const F21: u16 = 0x84;
+    pub const F22: u16 = 0x85;
+    pub const F23: u16 = 0x86;
+    pub const F24: u16 = 0x87;
+
+    // Letter keys
+    pub const A: u16 = 0x41;
+    pub const B: u16 = 0x42;
+    pub const C: u16 = 0x43;
+    pub const D: u16 = 0x44;
+    pub const E: u16 = 0x45;
+    pub const F: u16 = 0x46;
+    pub const G: u16 = 0x47;
+    pub const H: u16 = 0x48;
+    pub const I: u16 = 0x49;
+    pub const J: u16 = 0x4A;
+    pub const K: u16 = 0x4B;
+    pub const L: u16 = 0x4C;
+    pub const M: u16 = 0x4D;
+    pub const N: u16 = 0x4E;
+    pub const O: u16 = 0x4F;
+    pub const P: u16 = 0x50;
+    pub const Q: u16 = 0x51;
+    pub const R: u16 = 0x52;
+    pub const S: u16 = 0x53;
+    pub const T: u16 = 0x54;
+    pub const U: u16 = 0x55;
+    pub const V: u16 = 0x56;
+    pub const W: u16 = 0x57;
+    pub const X: u16 = 0x58;
+    pub const Y: u16 = 0x59;
+    pub const Z: u16 = 0x5A;
+
+    // Digit keys
+    pub const DIGIT_0: u16 = 0x30;
+    pub const DIGIT_1: u16 = 0x31;
+    pub const DIGIT_2: u16 = 0x32;
+    pub const DIGIT_3: u16 = 0x33;
+    pub const DIGIT_4: u16 = 0x34;
+    pub const DIGIT_5: u16 = 0x35;
+    pub const DIGIT_6: u16 = 0x36;
+    pub const DIGIT_7: u16 = 0x37;
+    pub const DIGIT_8: u16 = 0x38;
+    pub const DIGIT_9: u16 = 0x39;
+
+    // Navigation keys
+    pub const UP: u16 = 0x26;
+    pub const DOWN: u16 = 0x28;
+    pub const LEFT: u16 = 0x25;
+    pub const RIGHT: u16 = 0x27;
+    pub const HOME: u16 = 0x24;
+    pub const END: u16 = 0x23;
+    pub const PRIOR: u16 = 0x21; // VK_PRIOR = Page Up
+    pub const NEXT: u16 = 0x22; // VK_NEXT = Page Down
+    pub const INSERT: u16 = 0x2D;
+    pub const DELETE: u16 = 0x2E;
+
+    // Special keys
+    pub const ESCAPE: u16 = 0x1B;
+    pub const TAB: u16 = 0x09;
+    pub const SPACE: u16 = 0x20;
+    pub const RETURN: u16 = 0x0D;
+    pub const BACK: u16 = 0x08; // VK_BACK = Backspace
+    pub const SNAPSHOT: u16 = 0x2C; // VK_SNAPSHOT = Print Screen
+    pub const SCROLL: u16 = 0x91; // VK_SCROLL = Scroll Lock
+    pub const PAUSE: u16 = 0x13;
+
+    // Punctuation / symbol keys (US layout VK codes)
+    pub const OEM_MINUS: u16 = 0xBD; // - / _
+    pub const OEM_PLUS: u16 = 0xBB; // = / +
+    pub const OEM_4: u16 = 0xDB; // [ / {
+    pub const OEM_6: u16 = 0xDD; // ] / }
+    pub const OEM_5: u16 = 0xDC; // \ / |
+    pub const OEM_1: u16 = 0xBA; // ; / :
+    pub const OEM_7: u16 = 0xDE; // ' / "
+    pub const OEM_3: u16 = 0xC0; // ` / ~
+    pub const OEM_COMMA: u16 = 0xBC; // ,
+    pub const OEM_PERIOD: u16 = 0xBE; // .
+    pub const OEM_2: u16 = 0xBF; // / / ?
+
+    // Numpad keys
+    pub const NUMPAD0: u16 = 0x60;
+    pub const NUMPAD1: u16 = 0x61;
+    pub const NUMPAD2: u16 = 0x62;
+    pub const NUMPAD3: u16 = 0x63;
+    pub const NUMPAD4: u16 = 0x64;
+    pub const NUMPAD5: u16 = 0x65;
+    pub const NUMPAD6: u16 = 0x66;
+    pub const NUMPAD7: u16 = 0x67;
+    pub const NUMPAD8: u16 = 0x68;
+    pub const NUMPAD9: u16 = 0x69;
+    pub const MULTIPLY: u16 = 0x6A;
+    pub const ADD: u16 = 0x6B;
+    pub const SUBTRACT: u16 = 0x6D;
+    pub const DECIMAL: u16 = 0x6E;
+    pub const DIVIDE: u16 = 0x6F;
+    pub const NUMLOCK: u16 = 0x90;
 }
 
-/// Key matching info for Raw Input
-/// Returns (vk_code, requires_e0_flag)
-/// For modifier keys, Raw Input uses generic VK codes with E0 flag for right-side keys
-fn keycode_to_raw_input(key: KeyCode) -> (u16, bool) {
-    match key {
-        KeyCode::RightAlt => (vk::MENU, true), // VK_MENU + E0 = Right Alt
-        KeyCode::LeftAlt => (vk::MENU, false), // VK_MENU without E0 = Left Alt
-        KeyCode::RightControl => (vk::CONTROL, true),
-        KeyCode::LeftControl => (vk::CONTROL, false),
-        KeyCode::RightShift => (vk::SHIFT, true),
-        KeyCode::LeftShift => (vk::SHIFT, false),
-        KeyCode::CapsLock => (vk::CAPS_LOCK, false),
-        KeyCode::F13 => (vk::F13, false),
-        KeyCode::F14 => (vk::F14, false),
-        KeyCode::F15 => (vk::F15, false),
-        KeyCode::F16 => (vk::F16, false),
-        KeyCode::F17 => (vk::F17, false),
-        KeyCode::F18 => (vk::F18, false),
-        KeyCode::F19 => (vk::F19, false),
-        KeyCode::F20 => (vk::F20, false),
+/// Convert a Raw Input VK code + E0 flag to a KeyCode.
+/// Returns None for unmapped keys.
+fn raw_input_to_keycode(vk_code: u16, is_e0: bool) -> Option<KeyCode> {
+    match (vk_code, is_e0) {
+        // Modifier keys: generic VK + E0 flag distinguishes left/right
+        (vk::MENU, true) => Some(KeyCode::RightAlt),
+        (vk::MENU, false) => Some(KeyCode::LeftAlt),
+        (vk::CONTROL, true) => Some(KeyCode::RightControl),
+        (vk::CONTROL, false) => Some(KeyCode::LeftControl),
+        (vk::SHIFT, true) => Some(KeyCode::RightShift),
+        (vk::SHIFT, false) => Some(KeyCode::LeftShift),
+        (vk::CAPS_LOCK, _) => Some(KeyCode::CapsLock),
+        (vk::LWIN, _) => Some(KeyCode::LeftMeta),
+        (vk::RWIN, _) => Some(KeyCode::RightMeta),
+        // Function keys
+        (vk::F1, _) => Some(KeyCode::F1),
+        (vk::F2, _) => Some(KeyCode::F2),
+        (vk::F3, _) => Some(KeyCode::F3),
+        (vk::F4, _) => Some(KeyCode::F4),
+        (vk::F5, _) => Some(KeyCode::F5),
+        (vk::F6, _) => Some(KeyCode::F6),
+        (vk::F7, _) => Some(KeyCode::F7),
+        (vk::F8, _) => Some(KeyCode::F8),
+        (vk::F9, _) => Some(KeyCode::F9),
+        (vk::F10, _) => Some(KeyCode::F10),
+        (vk::F11, _) => Some(KeyCode::F11),
+        (vk::F12, _) => Some(KeyCode::F12),
+        (vk::F13, _) => Some(KeyCode::F13),
+        (vk::F14, _) => Some(KeyCode::F14),
+        (vk::F15, _) => Some(KeyCode::F15),
+        (vk::F16, _) => Some(KeyCode::F16),
+        (vk::F17, _) => Some(KeyCode::F17),
+        (vk::F18, _) => Some(KeyCode::F18),
+        (vk::F19, _) => Some(KeyCode::F19),
+        (vk::F20, _) => Some(KeyCode::F20),
+        (vk::F21, _) => Some(KeyCode::F21),
+        (vk::F22, _) => Some(KeyCode::F22),
+        (vk::F23, _) => Some(KeyCode::F23),
+        (vk::F24, _) => Some(KeyCode::F24),
+        // Letter keys
+        (vk::A, _) => Some(KeyCode::KeyA),
+        (vk::B, _) => Some(KeyCode::KeyB),
+        (vk::C, _) => Some(KeyCode::KeyC),
+        (vk::D, _) => Some(KeyCode::KeyD),
+        (vk::E, _) => Some(KeyCode::KeyE),
+        (vk::F, _) => Some(KeyCode::KeyF),
+        (vk::G, _) => Some(KeyCode::KeyG),
+        (vk::H, _) => Some(KeyCode::KeyH),
+        (vk::I, _) => Some(KeyCode::KeyI),
+        (vk::J, _) => Some(KeyCode::KeyJ),
+        (vk::K, _) => Some(KeyCode::KeyK),
+        (vk::L, _) => Some(KeyCode::KeyL),
+        (vk::M, _) => Some(KeyCode::KeyM),
+        (vk::N, _) => Some(KeyCode::KeyN),
+        (vk::O, _) => Some(KeyCode::KeyO),
+        (vk::P, _) => Some(KeyCode::KeyP),
+        (vk::Q, _) => Some(KeyCode::KeyQ),
+        (vk::R, _) => Some(KeyCode::KeyR),
+        (vk::S, _) => Some(KeyCode::KeyS),
+        (vk::T, _) => Some(KeyCode::KeyT),
+        (vk::U, _) => Some(KeyCode::KeyU),
+        (vk::V, _) => Some(KeyCode::KeyV),
+        (vk::W, _) => Some(KeyCode::KeyW),
+        (vk::X, _) => Some(KeyCode::KeyX),
+        (vk::Y, _) => Some(KeyCode::KeyY),
+        (vk::Z, _) => Some(KeyCode::KeyZ),
+        // Digit keys
+        (vk::DIGIT_0, _) => Some(KeyCode::Digit0),
+        (vk::DIGIT_1, _) => Some(KeyCode::Digit1),
+        (vk::DIGIT_2, _) => Some(KeyCode::Digit2),
+        (vk::DIGIT_3, _) => Some(KeyCode::Digit3),
+        (vk::DIGIT_4, _) => Some(KeyCode::Digit4),
+        (vk::DIGIT_5, _) => Some(KeyCode::Digit5),
+        (vk::DIGIT_6, _) => Some(KeyCode::Digit6),
+        (vk::DIGIT_7, _) => Some(KeyCode::Digit7),
+        (vk::DIGIT_8, _) => Some(KeyCode::Digit8),
+        (vk::DIGIT_9, _) => Some(KeyCode::Digit9),
+        // Navigation keys
+        (vk::UP, _) => Some(KeyCode::ArrowUp),
+        (vk::DOWN, _) => Some(KeyCode::ArrowDown),
+        (vk::LEFT, _) => Some(KeyCode::ArrowLeft),
+        (vk::RIGHT, _) => Some(KeyCode::ArrowRight),
+        (vk::HOME, _) => Some(KeyCode::Home),
+        (vk::END, _) => Some(KeyCode::End),
+        (vk::PRIOR, _) => Some(KeyCode::PageUp),
+        (vk::NEXT, _) => Some(KeyCode::PageDown),
+        (vk::INSERT, _) => Some(KeyCode::Insert),
+        (vk::DELETE, _) => Some(KeyCode::Delete),
+        // Special keys
+        (vk::ESCAPE, _) => Some(KeyCode::Escape),
+        (vk::TAB, _) => Some(KeyCode::Tab),
+        (vk::SPACE, _) => Some(KeyCode::Space),
+        (vk::RETURN, _) => Some(KeyCode::Enter),
+        (vk::BACK, _) => Some(KeyCode::Backspace),
+        (vk::SNAPSHOT, _) => Some(KeyCode::PrintScreen),
+        (vk::SCROLL, _) => Some(KeyCode::ScrollLock),
+        (vk::PAUSE, _) => Some(KeyCode::Pause),
+        // Punctuation
+        (vk::OEM_MINUS, _) => Some(KeyCode::Minus),
+        (vk::OEM_PLUS, _) => Some(KeyCode::Equal),
+        (vk::OEM_4, _) => Some(KeyCode::BracketLeft),
+        (vk::OEM_6, _) => Some(KeyCode::BracketRight),
+        (vk::OEM_5, _) => Some(KeyCode::Backslash),
+        (vk::OEM_1, _) => Some(KeyCode::Semicolon),
+        (vk::OEM_7, _) => Some(KeyCode::Quote),
+        (vk::OEM_3, _) => Some(KeyCode::Backquote),
+        (vk::OEM_COMMA, _) => Some(KeyCode::Comma),
+        (vk::OEM_PERIOD, _) => Some(KeyCode::Period),
+        (vk::OEM_2, _) => Some(KeyCode::Slash),
+        // Numpad
+        (vk::NUMPAD0, _) => Some(KeyCode::Numpad0),
+        (vk::NUMPAD1, _) => Some(KeyCode::Numpad1),
+        (vk::NUMPAD2, _) => Some(KeyCode::Numpad2),
+        (vk::NUMPAD3, _) => Some(KeyCode::Numpad3),
+        (vk::NUMPAD4, _) => Some(KeyCode::Numpad4),
+        (vk::NUMPAD5, _) => Some(KeyCode::Numpad5),
+        (vk::NUMPAD6, _) => Some(KeyCode::Numpad6),
+        (vk::NUMPAD7, _) => Some(KeyCode::Numpad7),
+        (vk::NUMPAD8, _) => Some(KeyCode::Numpad8),
+        (vk::NUMPAD9, _) => Some(KeyCode::Numpad9),
+        (vk::MULTIPLY, _) => Some(KeyCode::NumpadMultiply),
+        (vk::ADD, _) => Some(KeyCode::NumpadAdd),
+        (vk::SUBTRACT, _) => Some(KeyCode::NumpadSubtract),
+        (vk::DECIMAL, _) => Some(KeyCode::NumpadDecimal),
+        (vk::DIVIDE, _) => Some(KeyCode::NumpadDivide),
+        (vk::NUMLOCK, _) => Some(KeyCode::NumLock),
+        _ => None,
     }
 }
 
@@ -110,9 +317,13 @@ impl WindowsHotkeyBackend {
 }
 
 impl HotkeyBackend for WindowsHotkeyBackend {
-    fn start(&mut self, key: KeyCode) -> Result<(), String> {
+    fn start(&mut self, hotkeys: Vec<HotkeyCombination>) -> Result<(), String> {
         if self.running.load(Ordering::SeqCst) {
             return Err("Hotkey backend already running".to_string());
+        }
+
+        if hotkeys.is_empty() {
+            return Err("No hotkey combinations configured".to_string());
         }
 
         let (sender, receiver) = mpsc::channel();
@@ -120,8 +331,6 @@ impl HotkeyBackend for WindowsHotkeyBackend {
 
         let running = self.running.clone();
         running.store(true, Ordering::SeqCst);
-
-        let (target_vk, target_requires_e0) = keycode_to_raw_input(key);
 
         // Channel to receive thread ID from the spawned thread
         let (tid_sender, tid_receiver) = mpsc::channel();
@@ -133,12 +342,11 @@ impl HotkeyBackend for WindowsHotkeyBackend {
             let _ = tid_sender.send(thread_id);
 
             info!(
-                "[Hotkey] Starting Windows Raw Input message loop for VK {} (E0={})",
-                target_vk, target_requires_e0
+                "[Hotkey] Starting Windows Raw Input message loop for {} hotkey combination(s)",
+                hotkeys.len()
             );
 
-            if let Err(e) = run_message_loop(running.clone(), sender, target_vk, target_requires_e0)
-            {
+            if let Err(e) = run_message_loop(running.clone(), sender, hotkeys) {
                 error!("[Hotkey] Message loop error: {}", e);
             }
 
@@ -214,27 +422,25 @@ thread_local! {
     static HOTKEY_CONTEXT: std::cell::RefCell<Option<HotkeyContext>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Context for hotkey event handling
+/// Context for hotkey event handling with combination tracking
 struct HotkeyContext {
     sender: Sender<HotkeyEvent>,
-    target_vk: u16,
-    target_requires_e0: bool,
-    key_down: bool,
+    /// All configured hotkey combinations
+    hotkeys: Vec<HotkeyCombination>,
+    /// Currently pressed keys
+    pressed_keys: HashSet<KeyCode>,
+    /// Whether any combination is currently matched (PTT active)
+    any_matched: bool,
 }
 
 /// Run the Windows message loop on this thread
 fn run_message_loop(
     running: Arc<AtomicBool>,
     sender: Sender<HotkeyEvent>,
-    target_vk: u16,
-    target_requires_e0: bool,
+    hotkeys: Vec<HotkeyCombination>,
 ) -> Result<(), String> {
     unsafe {
         // Register window class.
-        // The class may already exist from a previous start/stop cycle (it is
-        // unregistered on cleanup, but if the thread was interrupted it could
-        // linger). Treat ERROR_CLASS_ALREADY_EXISTS as success since the
-        // definition is identical.
         let class_name = windows::core::w!("FlowSTT_HotkeyClass");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
@@ -287,9 +493,9 @@ fn run_message_loop(
         HOTKEY_CONTEXT.with(|ctx| {
             *ctx.borrow_mut() = Some(HotkeyContext {
                 sender,
-                target_vk,
-                target_requires_e0,
-                key_down: false,
+                hotkeys,
+                pressed_keys: HashSet::new(),
+                any_matched: false,
             });
         });
 
@@ -342,7 +548,7 @@ unsafe extern "system" fn window_proc(
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-/// Handle a raw input message
+/// Handle a raw input message - track pressed keys and match combinations
 unsafe fn handle_raw_input(hrawinput: HRAWINPUT) {
     // Get the size of the raw input data
     let mut size: u32 = 0;
@@ -385,23 +591,36 @@ unsafe fn handle_raw_input(hrawinput: HRAWINPUT) {
     let is_key_up = (flags & RI_KEY_BREAK) != 0;
     let is_e0 = (flags & RI_KEY_E0) != 0;
 
+    // Map VK code to KeyCode
+    let key_code = match raw_input_to_keycode(vk_code, is_e0) {
+        Some(k) => k,
+        None => return, // Unmapped key, ignore
+    };
+
     HOTKEY_CONTEXT.with(|ctx| {
         if let Some(ref mut context) = *ctx.borrow_mut() {
-            // Check if this is our target key
-            // For modifier keys, we need to match both VK code AND the E0 flag
-            let is_target_key = vk_code == context.target_vk && is_e0 == context.target_requires_e0;
+            // Update pressed key set
+            if is_key_up {
+                context.pressed_keys.remove(&key_code);
+            } else {
+                context.pressed_keys.insert(key_code);
+            }
 
-            if is_target_key {
-                if is_key_up && context.key_down {
-                    context.key_down = false;
-                    info!("[PTT] Key UP");
-                    let _ = context.sender.send(HotkeyEvent::Released);
-                } else if !is_key_up && !context.key_down {
-                    context.key_down = true;
-                    info!("[PTT] Key DOWN");
-                    let _ = context.sender.send(HotkeyEvent::Pressed);
-                }
-                // Note: We don't log repeated key-down events (auto-repeat while held)
+            // Check if any combination is now matched
+            let now_matched = context
+                .hotkeys
+                .iter()
+                .any(|combo| combo.is_subset_of(&context.pressed_keys));
+
+            // Emit events on state transitions
+            if now_matched && !context.any_matched {
+                context.any_matched = true;
+                info!("[PTT] Combination MATCHED - key DOWN");
+                let _ = context.sender.send(HotkeyEvent::Pressed);
+            } else if !now_matched && context.any_matched {
+                context.any_matched = false;
+                info!("[PTT] Combination RELEASED - key UP");
+                let _ = context.sender.send(HotkeyEvent::Released);
             }
         }
     });

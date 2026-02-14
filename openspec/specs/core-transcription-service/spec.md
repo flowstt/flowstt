@@ -54,7 +54,7 @@ The system SHALL use platform-native IPC mechanisms (Unix socket on Linux/macOS,
 - **THEN** it removes the stale socket and creates a new one
 
 ### Requirement: Service Request Handling
-The system SHALL handle client requests for device enumeration, transcription control, and status queries. The `AppReady` and `AppDisconnect` requests are removed; the service does not require client readiness signals.
+The system SHALL handle client requests for device enumeration, transcription control, configuration queries, and status queries. The `AppReady` and `AppDisconnect` requests are removed; the service does not require client readiness signals.
 
 #### Scenario: Ping request
 - **WHEN** a client sends a `Ping` request
@@ -75,6 +75,10 @@ The system SHALL handle client requests for device enumeration, transcription co
 #### Scenario: Get status request
 - **WHEN** a client sends a `GetStatus` request
 - **THEN** the service responds with current transcription state (active, in_speech, queue_depth)
+
+#### Scenario: Get config request
+- **WHEN** a client sends a `GetConfig` request
+- **THEN** the service responds with all persisted configuration values (transcription_mode, ptt_hotkeys)
 
 #### Scenario: Invalid request handling
 - **WHEN** a client sends a malformed or invalid request

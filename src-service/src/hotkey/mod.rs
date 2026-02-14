@@ -18,7 +18,7 @@ mod linux;
 
 pub use backend::{HotkeyBackend, HotkeyEvent};
 
-use flowstt_common::KeyCode;
+use flowstt_common::HotkeyCombination;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Global hotkey backend singleton.
@@ -68,11 +68,11 @@ pub fn get_hotkey_backend() -> Option<Arc<Mutex<Box<dyn HotkeyBackend>>>> {
     HOTKEY_BACKEND.get().cloned()
 }
 
-/// Start hotkey monitoring with the specified key.
-pub fn start_hotkey(key: KeyCode) -> Result<(), String> {
+/// Start hotkey monitoring with the specified combinations.
+pub fn start_hotkey(hotkeys: Vec<HotkeyCombination>) -> Result<(), String> {
     let backend = get_hotkey_backend().ok_or("Hotkey backend not available")?;
     let mut backend = backend.lock().map_err(|e| format!("Lock error: {}", e))?;
-    backend.start(key)
+    backend.start(hotkeys)
 }
 
 /// Stop hotkey monitoring.

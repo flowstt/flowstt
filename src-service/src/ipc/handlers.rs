@@ -1,7 +1,7 @@
 //! IPC request handlers.
 
 use flowstt_common::ipc::{EventType, Request, Response};
-use flowstt_common::{CudaStatus, ModelStatus, PttStatus, TranscriptionMode};
+use flowstt_common::{ConfigValues, CudaStatus, ModelStatus, PttStatus, TranscriptionMode};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -71,7 +71,7 @@ pub async fn start_capture() -> Result<(), String> {
     let aec_enabled = state.aec_enabled;
     let recording_mode = state.recording_mode;
     let transcription_mode = state.transcription_mode;
-    let ptt_key = state.ptt_key;
+    let ptt_hotkeys = state.ptt_hotkeys.clone();
 
     // Drop the lock before doing expensive operations
     drop(state);
@@ -81,10 +81,13 @@ pub async fn start_capture() -> Result<(), String> {
         // Audio will be started/stopped when the hotkey is pressed/released
 
         // Start hotkey backend
-        if let Err(e) = hotkey::start_hotkey(ptt_key) {
+        if let Err(e) = hotkey::start_hotkey(ptt_hotkeys.clone()) {
             return Err(format!("Failed to start PTT hotkey monitoring: {}", e));
         }
-        info!("PTT hotkey monitoring started for {:?}", ptt_key);
+        info!(
+            "PTT hotkey monitoring started for {} combination(s)",
+            ptt_hotkeys.len()
+        );
 
         // Start PTT controller
         if let Err(e) = ptt_controller::start_ptt_controller() {
@@ -350,6 +353,16 @@ pub async fn handle_request(request: Request) -> Response {
             Response::Status(status)
         }
 
+        Request::GetConfig => {
+            let state_arc = get_service_state();
+            let state = state_arc.lock().await;
+
+            Response::ConfigValues(ConfigValues {
+                transcription_mode: state.transcription_mode,
+                ptt_hotkeys: state.ptt_hotkeys.clone(),
+            })
+        }
+
         Request::SubscribeEvents => {
             // Actual subscription is handled in the server
             Response::Subscribed
@@ -405,14 +418,14 @@ pub async fn handle_request(request: Request) -> Response {
         Request::SetTranscriptionMode { mode } => {
             let state_arc = get_service_state();
 
-            let (old_mode, is_ready, ptt_key) = {
+            let (old_mode, is_ready, ptt_hotkeys) = {
                 let mut state = state_arc.lock().await;
                 let old_mode = state.transcription_mode;
                 state.transcription_mode = mode;
                 (
                     old_mode,
                     state.has_primary_source(),
-                    state.ptt_key,
+                    state.ptt_hotkeys.clone(),
                 )
             };
 
@@ -435,9 +448,9 @@ pub async fn handle_request(request: Request) -> Response {
             // Save configuration to disk
             let config = crate::config::Config {
                 transcription_mode: mode,
-                ptt_key,
+                ptt_hotkeys,
             };
-            if let Err(e) = config.save() {
+            if let Err(e) = crate::config::save_config(&config) {
                 warn!("Failed to save config: {}", e);
             }
 
@@ -451,49 +464,51 @@ pub async fn handle_request(request: Request) -> Response {
             Response::Ok
         }
 
-        Request::SetPushToTalkKey { key } => {
+        Request::SetPushToTalkHotkeys { hotkeys } => {
             let state_arc = get_service_state();
-            let (old_key, transcription_mode, is_ptt_monitoring) = {
+            let (old_hotkeys, transcription_mode, is_ptt_monitoring) = {
                 let mut state = state_arc.lock().await;
-                let old_key = state.ptt_key;
-                state.ptt_key = key;
+                let old_hotkeys = state.ptt_hotkeys.clone();
+                state.ptt_hotkeys = hotkeys.clone();
                 // The hotkey backend runs whenever the PTT controller is
                 // active, regardless of whether audio is currently capturing
                 // (audio only flows while the key is held).
                 let is_ptt_monitoring =
                     state.transcription_mode == TranscriptionMode::PushToTalk
                         && ptt_controller::is_ptt_controller_running();
-                (old_key, state.transcription_mode, is_ptt_monitoring)
+                (old_hotkeys, state.transcription_mode, is_ptt_monitoring)
             };
 
             info!(
-                "PTT key change requested: {:?} -> {:?} (monitoring={})",
-                old_key, key, is_ptt_monitoring
+                "PTT hotkeys change requested: {} -> {} combinations (monitoring={})",
+                old_hotkeys.len(),
+                hotkeys.len(),
+                is_ptt_monitoring
             );
 
-            // If PTT monitoring is active, restart hotkey with new key
+            // If PTT monitoring is active, restart hotkey with new combinations
             if is_ptt_monitoring {
                 hotkey::stop_hotkey();
-                if let Err(e) = hotkey::start_hotkey(key) {
+                if let Err(e) = hotkey::start_hotkey(hotkeys.clone()) {
                     // Revert on failure
-                    warn!("Failed to start hotkey with new key {:?}: {}", key, e);
+                    warn!("Failed to start hotkey with new combinations: {}", e);
                     let mut state = state_arc.lock().await;
-                    state.ptt_key = old_key;
-                    let _ = hotkey::start_hotkey(old_key);
-                    return Response::error(format!("Failed to set hotkey: {}", e));
+                    state.ptt_hotkeys = old_hotkeys.clone();
+                    let _ = hotkey::start_hotkey(old_hotkeys);
+                    return Response::error(format!("Failed to set hotkeys: {}", e));
                 }
             }
 
             // Save configuration to disk
             let config = crate::config::Config {
                 transcription_mode,
-                ptt_key: key,
+                ptt_hotkeys: hotkeys,
             };
-            if let Err(e) = config.save() {
+            if let Err(e) = crate::config::save_config(&config) {
                 warn!("Failed to save config: {}", e);
             }
 
-            info!("PTT key set to {:?}", key);
+            info!("PTT hotkeys updated");
             Response::Ok
         }
 
@@ -510,7 +525,7 @@ pub async fn handle_request(request: Request) -> Response {
 
             Response::PttStatus(PttStatus {
                 mode: state.transcription_mode,
-                key: state.ptt_key,
+                hotkeys: state.ptt_hotkeys.clone(),
                 is_active: state.is_ptt_active,
                 available,
                 error,
