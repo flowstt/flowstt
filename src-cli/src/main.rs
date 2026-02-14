@@ -627,6 +627,8 @@ async fn get_config_values(client: &mut Client) -> Result<ConfigValues, CliError
     Ok(ConfigValues {
         transcription_mode: config.transcription_mode,
         ptt_hotkeys: config.ptt_hotkeys,
+        auto_paste_enabled: config.auto_paste_enabled,
+        auto_paste_delay_ms: config.auto_paste_delay_ms,
     })
 }
 

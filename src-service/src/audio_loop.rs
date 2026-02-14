@@ -234,11 +234,20 @@ impl TranscriptionCallback for TranscriptionEventBroadcaster {
         broadcast_event(Response::Event {
             event: EventType::TranscriptionComplete(TranscriptionResult {
                 id: Some(entry.id),
-                text: entry.text,
+                text: entry.text.clone(),
                 timestamp: Some(entry.timestamp),
                 audio_path: entry.wav_path,
             }),
         });
+
+        // Copy to clipboard and optionally paste into the foreground app.
+        // Config is loaded from disk so runtime changes take effect immediately.
+        let config = crate::config::Config::load();
+        crate::clipboard::copy_and_paste(
+            &entry.text,
+            config.auto_paste_enabled,
+            config.auto_paste_delay_ms,
+        );
     }
 
     fn on_transcription_error(&self, error: String) {

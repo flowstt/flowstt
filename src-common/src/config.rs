@@ -21,6 +21,20 @@ pub struct Config {
     /// Configured push-to-talk hotkey combinations (new format)
     #[serde(default)]
     pub ptt_hotkeys: Vec<HotkeyCombination>,
+    /// Whether auto-paste into the foreground application is enabled
+    #[serde(default = "default_auto_paste_enabled")]
+    pub auto_paste_enabled: bool,
+    /// Delay in milliseconds between clipboard write and paste simulation
+    #[serde(default = "default_auto_paste_delay_ms")]
+    pub auto_paste_delay_ms: u32,
+}
+
+fn default_auto_paste_enabled() -> bool {
+    true
+}
+
+fn default_auto_paste_delay_ms() -> u32 {
+    50
 }
 
 /// Legacy configuration format for backward-compatible loading.
@@ -32,6 +46,10 @@ struct LegacyConfig {
     ptt_key: Option<KeyCode>,
     /// New multi-hotkey field (may be present if already migrated)
     ptt_hotkeys: Option<Vec<HotkeyCombination>>,
+    /// Whether auto-paste is enabled (may be absent in old configs)
+    auto_paste_enabled: Option<bool>,
+    /// Auto-paste delay in ms (may be absent in old configs)
+    auto_paste_delay_ms: Option<u32>,
 }
 
 impl Config {
@@ -95,6 +113,8 @@ impl Config {
         Self {
             transcription_mode: TranscriptionMode::default(),
             ptt_hotkeys: vec![HotkeyCombination::single(KeyCode::default())],
+            auto_paste_enabled: true,
+            auto_paste_delay_ms: 50,
         }
     }
 
@@ -118,6 +138,8 @@ impl Config {
         Self {
             transcription_mode: legacy.transcription_mode,
             ptt_hotkeys,
+            auto_paste_enabled: legacy.auto_paste_enabled.unwrap_or(true),
+            auto_paste_delay_ms: legacy.auto_paste_delay_ms.unwrap_or(50),
         }
     }
 }

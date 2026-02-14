@@ -436,6 +436,20 @@ pub struct ConfigValues {
     pub transcription_mode: TranscriptionMode,
     /// Configured push-to-talk hotkey combinations
     pub ptt_hotkeys: Vec<HotkeyCombination>,
+    /// Whether auto-paste into the foreground application is enabled
+    #[serde(default = "default_auto_paste_enabled")]
+    pub auto_paste_enabled: bool,
+    /// Delay in milliseconds between clipboard write and paste simulation
+    #[serde(default = "default_auto_paste_delay_ms")]
+    pub auto_paste_delay_ms: u32,
+}
+
+fn default_auto_paste_enabled() -> bool {
+    true
+}
+
+fn default_auto_paste_delay_ms() -> u32 {
+    50
 }
 
 /// Push-to-talk status information.

@@ -65,6 +65,13 @@ pub enum Request {
     /// Get the current PTT status
     GetPttStatus,
 
+    // === Clipboard / Auto-Paste ===
+    /// Enable or disable automatic paste after transcription
+    SetAutoPaste {
+        /// Whether auto-paste should be enabled
+        enabled: bool,
+    },
+
     // === History Management ===
     /// Get all transcription history entries
     GetHistory,

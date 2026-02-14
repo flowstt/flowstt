@@ -5,6 +5,7 @@
 
 mod audio;
 mod audio_loop;
+mod clipboard;
 pub mod config;
 pub mod history;
 mod hotkey;

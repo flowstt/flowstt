@@ -357,9 +357,12 @@ pub async fn handle_request(request: Request) -> Response {
             let state_arc = get_service_state();
             let state = state_arc.lock().await;
 
+            let config = crate::config::Config::load();
             Response::ConfigValues(ConfigValues {
                 transcription_mode: state.transcription_mode,
                 ptt_hotkeys: state.ptt_hotkeys.clone(),
+                auto_paste_enabled: config.auto_paste_enabled,
+                auto_paste_delay_ms: config.auto_paste_delay_ms,
             })
         }
 
@@ -445,11 +448,10 @@ pub async fn handle_request(request: Request) -> Response {
                 }
             }
 
-            // Save configuration to disk
-            let config = crate::config::Config {
-                transcription_mode: mode,
-                ptt_hotkeys,
-            };
+            // Save configuration to disk (load first to preserve other fields)
+            let mut config = crate::config::Config::load();
+            config.transcription_mode = mode;
+            config.ptt_hotkeys = ptt_hotkeys;
             if let Err(e) = crate::config::save_config(&config) {
                 warn!("Failed to save config: {}", e);
             }
@@ -499,11 +501,10 @@ pub async fn handle_request(request: Request) -> Response {
                 }
             }
 
-            // Save configuration to disk
-            let config = crate::config::Config {
-                transcription_mode,
-                ptt_hotkeys: hotkeys,
-            };
+            // Save configuration to disk (load first to preserve other fields)
+            let mut config = crate::config::Config::load();
+            config.transcription_mode = transcription_mode;
+            config.ptt_hotkeys = hotkeys;
             if let Err(e) = crate::config::save_config(&config) {
                 warn!("Failed to save config: {}", e);
             }
@@ -556,6 +557,18 @@ pub async fn handle_request(request: Request) -> Response {
                 runtime_available,
                 system_info,
             })
+        }
+
+        Request::SetAutoPaste { enabled } => {
+            // Load current config, update the auto-paste setting, and save
+            let mut config = crate::config::Config::load();
+            config.auto_paste_enabled = enabled;
+            if let Err(e) = crate::config::save_config(&config) {
+                warn!("Failed to save config: {}", e);
+            }
+
+            info!("Auto-paste set to {}", enabled);
+            Response::Ok
         }
 
         Request::GetHistory => {
