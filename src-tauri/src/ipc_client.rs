@@ -258,7 +258,7 @@ fn forward_event_to_tauri(app_handle: &AppHandle, event: EventType) {
             let _ = app_handle.emit("visualization-data", &data);
         }
         EventType::TranscriptionComplete(result) => {
-            let _ = app_handle.emit("transcription-complete", &result.text);
+            let _ = app_handle.emit("transcription-complete", &result);
         }
         EventType::SpeechStarted => {
             let _ = app_handle.emit("speech-started", ());
@@ -288,6 +288,9 @@ fn forward_event_to_tauri(app_handle: &AppHandle, event: EventType) {
         }
         EventType::TranscriptionModeChanged { mode } => {
             let _ = app_handle.emit("transcription-mode-changed", mode);
+        }
+        EventType::HistoryEntryDeleted { id } => {
+            let _ = app_handle.emit("history-entry-deleted", id);
         }
         EventType::Shutdown => {
             let _ = app_handle.emit("service-shutdown", ());

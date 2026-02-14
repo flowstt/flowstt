@@ -296,19 +296,44 @@ The system SHALL buffer speech detection metrics for the lookback duration befor
 - **THEN** they are rendered in chronological order with lookback insertions at correct positions
 
 ### Requirement: Streaming Transcription Display
-The system SHALL display transcription output as a continuously streaming text panel that appends new text to the existing content rather than replacing it entirely.
+The system SHALL display transcription output as a scrolling history of individual transcription segments. Each segment represents one PTT hold-transcribe-release cycle or one automatic speech detection segment. New segments are appended to the bottom of the display.
 
-#### Scenario: Text appends on new transcription
+#### Scenario: Segment appended on new transcription
 - **WHEN** new transcription text is received from the speech-to-text engine
-- **THEN** the text is appended to the end of the existing displayed text with a space separator
+- **THEN** a new segment row is added to the bottom of the transcription history display
 
-#### Scenario: No line breaks between segments
-- **WHEN** multiple transcription segments are received
-- **THEN** they are joined as continuous flowing text without line breaks between them
+#### Scenario: Each segment displayed as a distinct row
+- **WHEN** multiple transcription segments have been received
+- **THEN** each segment is displayed as a separate row with visible separation between segments
 
-#### Scenario: Auto-scroll to newest text
-- **WHEN** new text is appended to the transcription display
-- **THEN** the display automatically scrolls to show the most recent text at the bottom
+#### Scenario: Segment includes timestamp
+- **WHEN** a transcription segment is displayed
+- **THEN** the segment row includes a timestamp indicating when the transcription was captured
+
+#### Scenario: Segment includes copy button
+- **WHEN** a transcription segment is displayed
+- **THEN** the segment row includes a copy button that copies the segment text to the clipboard when clicked
+
+#### Scenario: Segment includes delete button
+- **WHEN** a transcription segment is displayed
+- **THEN** the segment row includes a delete button that removes the segment from the display and from the persistent history file
+- **AND** deletes the associated cached WAV file if one exists
+
+#### Scenario: Segment includes play button when WAV exists
+- **WHEN** a transcription segment is displayed and the associated cached WAV file exists on disk
+- **THEN** the segment row includes a play button that plays the WAV audio when clicked
+
+#### Scenario: Segment hides play button when WAV missing
+- **WHEN** a transcription segment is displayed and no associated WAV file exists (deleted or expired)
+- **THEN** no play button is shown for that segment
+
+#### Scenario: Auto-scroll to newest segment
+- **WHEN** a new segment is added to the transcription display
+- **THEN** the display automatically scrolls to show the most recent segment at the bottom
+
+#### Scenario: Scrollable history
+- **WHEN** the transcription display contains more segments than fit in the visible area
+- **THEN** the user can scroll up to view older segments
 
 ### Requirement: Transcription Text Styling
 The system SHALL display transcription text using a light blue color and fixed-width font for readability.
@@ -320,28 +345,6 @@ The system SHALL display transcription text using a light blue color and fixed-w
 #### Scenario: Light blue text color
 - **WHEN** transcription text is displayed
 - **THEN** the text color is light blue (#7DD3FC) providing good contrast against the dark background
-
-### Requirement: Transcription Panel Fade Effect
-The system SHALL display a fade-out gradient at the top of the transcription panel to indicate content continues above the visible area.
-
-#### Scenario: Top fade gradient visible
-- **WHEN** the transcription panel contains text
-- **THEN** a gradient fade effect is visible at the top edge, transitioning from transparent to fully visible over approximately 15% of the panel height
-
-#### Scenario: Fade does not obscure recent text
-- **WHEN** text is displayed in the panel
-- **THEN** the most recent text at the bottom of the panel is fully visible without any fade effect
-
-### Requirement: Transcription Buffer Limit
-The system SHALL limit the transcription display to the most recent text that fits within the panel, discarding older content.
-
-#### Scenario: Old text discarded when buffer full
-- **WHEN** the accumulated transcription text exceeds the visible capacity of the panel
-- **THEN** the oldest text is removed from the beginning to keep only the most recent content visible
-
-#### Scenario: No scrollable history
-- **WHEN** the user attempts to scroll the transcription panel
-- **THEN** no additional history is available beyond what is currently visible
 
 ### Requirement: Bundled Transcription Font
 The system SHALL bundle the Fira Mono font with the application for consistent transcription text rendering across platforms.
@@ -389,7 +392,7 @@ The system SHALL display status messages that reflect the current transcribe mod
 - **THEN** the status indicates pending transcriptions (e.g., "Transcribing... (2 pending)")
 
 ### Requirement: Mini Waveform Rendering
-The system SHALL render a simplified real-time waveform in the mini waveform canvas that shows audio activity without detailed metrics.
+The system SHALL render a simplified real-time waveform in the mini waveform canvas that shows audio activity without detailed metrics. The mini waveform SHALL only be visible when audio capture is active.
 
 #### Scenario: Mini waveform receives visualization data
 - **WHEN** visualization data events are emitted during monitoring
@@ -419,9 +422,9 @@ The system SHALL render a simplified real-time waveform in the mini waveform can
 - **WHEN** audio monitoring is active
 - **THEN** the mini waveform animation loop runs at 60fps for smooth visualization
 
-#### Scenario: Mini waveform idle state
-- **WHEN** audio monitoring is not active
-- **THEN** the mini waveform displays a flat horizontal gray line at center height
+#### Scenario: Mini waveform hidden when idle
+- **WHEN** audio capture is not active
+- **THEN** the mini waveform canvas is hidden (display none) rather than showing a flat line
 
 ### Requirement: Visualization Window Event Subscription
 The visualization window SHALL independently subscribe to visualization data events from the backend.

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -50,6 +51,22 @@ interface PttStatus {
   error: string | null;
 }
 
+// History entry from the service
+interface HistoryEntry {
+  id: string;
+  text: string;
+  timestamp: string;
+  wav_path: string | null;
+}
+
+// Enriched transcription result payload
+interface TranscriptionCompletePayload {
+  id: string | null;
+  text: string;
+  timestamp: string | null;
+  audio_path: string | null;
+}
+
 // Key code display names (subset for main window display)
 const KEY_DISPLAY_NAMES: Record<string, string> = {
   right_alt: "Right Alt", left_alt: "Left Alt",
@@ -83,7 +100,7 @@ function hotkeysDisplaySummary(hotkeys: HotkeyCombination[]): string {
 
 // DOM elements
 let statusEl: HTMLElement | null;
-let resultEl: HTMLElement | null;
+let historyContainer: HTMLElement | null;
 let modelWarning: HTMLElement | null;
 let modelPathEl: HTMLElement | null;
 let downloadModelBtn: HTMLButtonElement | null;
@@ -110,6 +127,7 @@ let captureStateChangedUnlisten: UnlistenFn | null = null;
 let pttPressedUnlisten: UnlistenFn | null = null;
 let pttReleasedUnlisten: UnlistenFn | null = null;
 let transcriptionModeChangedUnlisten: UnlistenFn | null = null;
+let historyEntryDeletedUnlisten: UnlistenFn | null = null;
 
 let miniWaveformRenderer: MiniWaveformRenderer | null = null;
 
@@ -198,13 +216,18 @@ async function setupEventListeners() {
     });
   }
 
-  // Transcription results
+  // Transcription results (now with enriched payload)
   if (!transcriptionCompleteUnlisten) {
-    transcriptionCompleteUnlisten = await listen<string>("transcription-complete", (event) => {
-      // Always buffer the text immediately (appendTranscription handles this)
-      // The display update will be deferred if window is hidden and applied
-      // when the window becomes visible again via visibilitychange handler
-      appendTranscription(event.payload);
+    transcriptionCompleteUnlisten = await listen<TranscriptionCompletePayload>("transcription-complete", (event) => {
+      const payload = event.payload;
+      if (payload.id && payload.timestamp) {
+        appendHistorySegment({
+          id: payload.id,
+          text: payload.text,
+          timestamp: payload.timestamp,
+          wav_path: payload.audio_path,
+        });
+      }
     });
   }
 
@@ -239,13 +262,16 @@ async function setupEventListeners() {
           updateStatusDisplay();
         }
 
-        // Update waveform renderer
+        // Update waveform renderer and visibility
         if (isCapturing) {
+          if (miniWaveformCanvas) miniWaveformCanvas.style.display = "block";
+          miniWaveformRenderer?.resize();
           miniWaveformRenderer?.clear();
           miniWaveformRenderer?.start();
         } else {
           miniWaveformRenderer?.stop();
           miniWaveformRenderer?.clear();
+          if (miniWaveformCanvas) miniWaveformCanvas.style.display = "none";
         }
       }
     );
@@ -280,6 +306,13 @@ async function setupEventListeners() {
       }
     );
   }
+
+  // History entry deleted (from another client or cleanup)
+  if (!historyEntryDeletedUnlisten) {
+    historyEntryDeletedUnlisten = await listen<string>("history-entry-deleted", (event) => {
+      removeHistorySegmentFromDOM(event.payload);
+    });
+  }
 }
 
 function cleanupEventListeners() {
@@ -309,95 +342,195 @@ function cleanupEventListeners() {
   
   transcriptionModeChangedUnlisten?.();
   transcriptionModeChangedUnlisten = null;
+  
+  historyEntryDeletedUnlisten?.();
+  historyEntryDeletedUnlisten = null;
 }
 
-// ============== Transcription Display ==============
+// ============== History Display ==============
 
-let transcriptionBuffer = "";
-let resultTextSpan: HTMLSpanElement | null = null;
-// Track if display needs refresh when window becomes visible
-let transcriptionDisplayDirty = false;
+// Currently playing audio element (if any)
+let currentAudio: HTMLAudioElement | null = null;
 
-function updateTranscriptionDisplay(): void {
-  if (!resultEl) return;
-
-  // If document is hidden, mark as dirty and skip update (will refresh on visibility change)
-  if (document.hidden) {
-    transcriptionDisplayDirty = true;
-    return;
+/** Format an ISO 8601 timestamp for display */
+function formatTimestamp(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return "";
   }
-
-  // On first call, find or create the text span (avoid innerHTML replacement)
-  if (!resultTextSpan) {
-    resultTextSpan = resultEl.querySelector(".result-text");
-    if (!resultTextSpan) {
-      // Create structure if missing
-      resultEl.innerHTML = '<span class="result-text"><span class="result-cursor"></span></span>';
-      resultTextSpan = resultEl.querySelector(".result-text");
-    }
-  }
-
-  if (resultTextSpan) {
-    // Get cursor element
-    const cursor = resultTextSpan.querySelector(".result-cursor");
-    
-    // Update text content directly (preserves cursor element)
-    // First, remove all text nodes
-    const childNodes = Array.from(resultTextSpan.childNodes);
-    for (const node of childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        resultTextSpan.removeChild(node);
-      }
-    }
-    
-    // Insert new text before cursor
-    if (transcriptionBuffer.length > 0 && cursor) {
-      const textNode = document.createTextNode(transcriptionBuffer);
-      resultTextSpan.insertBefore(textNode, cursor);
-    }
-  }
-
-  resultEl.scrollTop = resultEl.scrollHeight;
-  transcriptionDisplayDirty = false;
 }
 
-// Handle visibility change to refresh display when window becomes visible
-function handleVisibilityChange(): void {
-  if (!document.hidden && transcriptionDisplayDirty) {
-    // Use requestAnimationFrame to ensure we're in a paint cycle
-    requestAnimationFrame(() => {
-      updateTranscriptionDisplay();
+/** Create a DOM element for a history segment */
+function createSegmentElement(entry: HistoryEntry): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "history-segment";
+  row.dataset.id = entry.id;
+
+  // Timestamp
+  const ts = document.createElement("span");
+  ts.className = "segment-timestamp";
+  ts.textContent = formatTimestamp(entry.timestamp);
+  row.appendChild(ts);
+
+  // Text
+  const text = document.createElement("span");
+  text.className = "segment-text";
+  text.textContent = entry.text;
+  row.appendChild(text);
+
+  // Actions
+  const actions = document.createElement("span");
+  actions.className = "segment-actions";
+
+  // Play button (only if WAV exists)
+  if (entry.wav_path) {
+    const playBtn = document.createElement("button");
+    playBtn.className = "segment-btn";
+    playBtn.title = "Play audio";
+    playBtn.innerHTML = "&#9654;"; // play triangle
+    const wavPath = entry.wav_path;
+    playBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      playSegmentAudio(wavPath, playBtn);
     });
+    actions.appendChild(playBtn);
+  }
+
+  // Copy button
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "segment-btn";
+  copyBtn.title = "Copy text";
+  copyBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 0 1 2 9.5v-7A1.5 1.5 0 0 1 3.5 1h7A1.5 1.5 0 0 1 12 2.5V5"/></svg>';
+  copyBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(entry.text).then(() => {
+      copyBtn.classList.add("copy-success");
+      setTimeout(() => copyBtn.classList.remove("copy-success"), 1000);
+    });
+  });
+  actions.appendChild(copyBtn);
+
+  // Delete button
+  const deleteBtn = document.createElement("button");
+  deleteBtn.className = "segment-btn";
+  deleteBtn.title = "Delete";
+  deleteBtn.innerHTML = "&#10005;"; // X mark
+  deleteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteHistoryEntry(entry.id, row);
+  });
+  actions.appendChild(deleteBtn);
+
+  row.appendChild(actions);
+  return row;
+}
+
+/** Append a new segment to the history display and scroll to bottom */
+function appendHistorySegment(entry: HistoryEntry): void {
+  if (!historyContainer) return;
+
+  // Remove empty state message if present
+  const emptyMsg = historyContainer.querySelector(".history-empty");
+  if (emptyMsg) emptyMsg.remove();
+
+  const el = createSegmentElement(entry);
+  historyContainer.appendChild(el);
+  historyContainer.scrollTop = historyContainer.scrollHeight;
+}
+
+/** Remove a segment from the DOM by ID */
+function removeHistorySegmentFromDOM(id: string): void {
+  if (!historyContainer) return;
+  const el = historyContainer.querySelector(`[data-id="${id}"]`);
+  if (el) el.remove();
+
+  // Show empty state if no more segments
+  if (historyContainer.children.length === 0) {
+    showEmptyState();
   }
 }
 
-function appendTranscription(newText: string): void {
-  if (!resultEl) return;
+/** Show the empty state message */
+function showEmptyState(): void {
+  if (!historyContainer) return;
+  if (historyContainer.querySelector(".history-empty")) return;
+  const msg = document.createElement("div");
+  msg.className = "history-empty";
+  msg.textContent = "No transcriptions yet. Start speaking to begin.";
+  historyContainer.appendChild(msg);
+}
 
-  const trimmedText = newText.trim();
-  if (!trimmedText) return;
+/** Load full history from the service and render */
+async function loadHistory(): Promise<void> {
+  if (!historyContainer) return;
 
-  console.log("[Transcription] Received:", trimmedText);
+  try {
+    const entries = await invoke<HistoryEntry[]>("get_history");
+    historyContainer.innerHTML = "";
 
-  if (transcriptionBuffer.length > 0) {
-    transcriptionBuffer += " " + trimmedText;
-  } else {
-    transcriptionBuffer = trimmedText;
-  }
-
-  // Truncate to keep buffer manageable
-  const maxChars = 2000;
-  if (transcriptionBuffer.length > maxChars) {
-    const startIndex = transcriptionBuffer.length - maxChars;
-    const spaceIndex = transcriptionBuffer.indexOf(" ", startIndex);
-    if (spaceIndex !== -1) {
-      transcriptionBuffer = transcriptionBuffer.substring(spaceIndex + 1);
-    } else {
-      transcriptionBuffer = transcriptionBuffer.substring(startIndex);
+    if (entries.length === 0) {
+      showEmptyState();
+      return;
     }
+
+    for (const entry of entries) {
+      const el = createSegmentElement(entry);
+      historyContainer.appendChild(el);
+    }
+
+    // Scroll to bottom to show most recent
+    historyContainer.scrollTop = historyContainer.scrollHeight;
+  } catch (error) {
+    console.error("Failed to load history:", error);
+  }
+}
+
+/** Delete a history entry via the service */
+async function deleteHistoryEntry(id: string, rowEl: HTMLElement): Promise<void> {
+  try {
+    await invoke("delete_history_entry", { id });
+    rowEl.remove();
+    if (historyContainer && historyContainer.children.length === 0) {
+      showEmptyState();
+    }
+  } catch (error) {
+    console.error("Failed to delete history entry:", error);
+  }
+}
+
+/** Play a WAV file for a segment */
+function playSegmentAudio(wavPath: string, btn: HTMLButtonElement): void {
+  // Stop any currently playing audio
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+    // Remove playing state from all buttons
+    document.querySelectorAll(".segment-btn.playing").forEach(b => b.classList.remove("playing"));
   }
 
-  updateTranscriptionDisplay();
+  const assetUrl = convertFileSrc(wavPath);
+  const audio = new Audio(assetUrl);
+  currentAudio = audio;
+  btn.classList.add("playing");
+
+  audio.addEventListener("ended", () => {
+    btn.classList.remove("playing");
+    currentAudio = null;
+  });
+
+  audio.addEventListener("error", () => {
+    btn.classList.remove("playing");
+    currentAudio = null;
+    console.error("Failed to play audio:", wavPath);
+  });
+
+  audio.play().catch((e) => {
+    btn.classList.remove("playing");
+    currentAudio = null;
+    console.error("Audio playback error:", e);
+  });
 }
 
 // ============== PTT and Mode Control ==============
@@ -537,7 +670,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Get DOM elements
   statusEl = document.querySelector("#status");
-  resultEl = document.querySelector("#transcription-result");
+  historyContainer = document.querySelector("#history-container");
   modelWarning = document.querySelector("#model-warning");
   modelPathEl = document.querySelector("#model-path");
   downloadModelBtn = document.querySelector("#download-model-btn");
@@ -550,7 +683,6 @@ window.addEventListener("DOMContentLoaded", () => {
   // Initialize mini waveform renderer
   if (miniWaveformCanvas) {
     miniWaveformRenderer = new MiniWaveformRenderer(miniWaveformCanvas, 64);
-    miniWaveformRenderer.drawIdle();
 
     miniWaveformCanvas.addEventListener("dblclick", (e) => {
       e.preventDefault();
@@ -581,9 +713,8 @@ window.addEventListener("DOMContentLoaded", () => {
     cleanupEventListeners();
   });
 
-  // Handle visibility change to refresh transcription display when window becomes visible
-  // This ensures updates that arrived while backgrounded are rendered
-  document.addEventListener("visibilitychange", handleVisibilityChange);
+  // Handle visibility change - no special handling needed for history segments
+  // since DOM updates persist correctly even when the window is hidden
 
   // Initialize app
   initializeApp();
@@ -639,12 +770,18 @@ async function initializeApp() {
   checkModelStatus();
   checkCudaStatus();
   loadPttStatus();
+
+  // Load transcription history from service
+  await loadHistory();
+  startupLog(`loadHistory done (+${elapsed()})`);
   
   // Update status display based on synced state
   updateStatusDisplay();
   
-  // If capturing, start waveform renderer
+  // If capturing, show and start waveform renderer
   if (isCapturing) {
+    if (miniWaveformCanvas) miniWaveformCanvas.style.display = "block";
+    miniWaveformRenderer?.resize();
     miniWaveformRenderer?.clear();
     miniWaveformRenderer?.start();
   }

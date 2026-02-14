@@ -16,9 +16,11 @@
       {
         "label": "main",
         "title": "FlowSTT",
-        "width": 900,
-        "height": 340,
-        "resizable": false,
+        "width": 600,
+        "height": 300,
+        "minWidth": 480,
+        "minHeight": 240,
+        "resizable": true,
         "decorations": false,
         "transparent": true,
         "shadow": false,
@@ -27,7 +29,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
     }
   },
   "bundle": {

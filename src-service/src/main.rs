@@ -6,6 +6,7 @@
 mod audio;
 mod audio_loop;
 pub mod config;
+pub mod history;
 mod hotkey;
 mod ipc;
 mod platform;
@@ -101,6 +102,22 @@ fn main() {
     }
 
     info!("FlowSTT Service starting (pid: {})...", std::process::id());
+
+    // Load transcription history and clean up old WAV files (>24h)
+    {
+        let history = history::get_history();
+        let mut h = history.lock().unwrap();
+        info!("Loaded {} history entries", h.get_entries().len());
+        h.cleanup_wav_files(std::time::Duration::from_secs(86400));
+    }
+
+    // Ensure recordings directory exists
+    {
+        let recordings_dir = history::TranscriptionHistory::recordings_dir();
+        if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+            warn!("Failed to create recordings directory {:?}: {}", recordings_dir, e);
+        }
+    }
 
     // Load configuration from disk and apply to service state
     let loaded_config = config::load_config();

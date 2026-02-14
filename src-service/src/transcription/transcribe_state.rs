@@ -4,7 +4,6 @@
 //! - `SegmentRingBuffer`: A ring buffer for continuous audio capture
 //! - `TranscribeState`: State management for transcribe mode
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::audio::{generate_recording_filename, save_to_wav};
@@ -624,11 +623,9 @@ impl TranscribeState {
             return;
         }
 
-        // Save to WAV file
+        // Save to WAV file in app data directory
         let filename = generate_recording_filename();
-        let recordings_dir = directories::BaseDirs::new()
-            .map(|d| d.home_dir().join("Documents").join("Recordings"))
-            .unwrap_or_else(|| PathBuf::from(".").join("Recordings"));
+        let recordings_dir = crate::history::TranscriptionHistory::recordings_dir();
 
         // Create directory if it doesn't exist
         if let Err(e) = std::fs::create_dir_all(&recordings_dir) {

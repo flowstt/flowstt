@@ -112,8 +112,9 @@ fn recreate_main_window(app: &tauri::AppHandle) {
     let window =
         tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
             .title("FlowSTT")
-            .inner_size(900.0, 340.0)
-            .resizable(false)
+            .inner_size(600.0, 300.0)
+            .min_inner_size(480.0, 240.0)
+            .resizable(true)
             .decorations(false)
             .transparent(true)
             .shadow(false)

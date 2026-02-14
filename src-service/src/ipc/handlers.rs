@@ -558,6 +558,40 @@ pub async fn handle_request(request: Request) -> Response {
             })
         }
 
+        Request::GetHistory => {
+            let history = crate::history::get_history();
+            let h = history.lock().unwrap();
+            let entries: Vec<flowstt_common::HistoryEntry> = h
+                .get_entries()
+                .iter()
+                .map(|e| flowstt_common::HistoryEntry {
+                    id: e.id.clone(),
+                    text: e.text.clone(),
+                    timestamp: e.timestamp.clone(),
+                    wav_path: e.wav_path.clone(),
+                })
+                .collect();
+            Response::History { entries }
+        }
+
+        Request::DeleteHistoryEntry { id } => {
+            let history = crate::history::get_history();
+            let deleted = {
+                let mut h = history.lock().unwrap();
+                h.delete_entry(&id)
+            };
+            if deleted {
+                info!("Deleted history entry: {}", id);
+                // Broadcast deletion event to all subscribed clients
+                broadcast_event(Response::Event {
+                    event: EventType::HistoryEntryDeleted { id },
+                });
+                Response::Ok
+            } else {
+                Response::error(format!("History entry not found: {}", id))
+            }
+        }
+
         Request::Shutdown => {
             info!("Shutdown requested via IPC");
 

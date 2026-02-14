@@ -551,11 +551,31 @@ pub struct SpeechMetrics {
     pub is_word_break: bool,
 }
 
+/// A single entry in the transcription history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    /// Unique identifier for this entry
+    pub id: String,
+    /// Transcribed text
+    pub text: String,
+    /// ISO 8601 timestamp of when the transcription occurred
+    pub timestamp: String,
+    /// Path to the cached WAV file, if it still exists
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wav_path: Option<String>,
+}
+
 /// Transcription result for a speech segment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptionResult {
+    /// Unique history entry ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Transcribed text
     pub text: String,
+    /// ISO 8601 timestamp of the transcription
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
     /// Path to the saved audio file (if saved)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_path: Option<String>,

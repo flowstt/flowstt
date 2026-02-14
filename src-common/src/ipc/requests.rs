@@ -65,6 +65,15 @@ pub enum Request {
     /// Get the current PTT status
     GetPttStatus,
 
+    // === History Management ===
+    /// Get all transcription history entries
+    GetHistory,
+    /// Delete a single history entry by ID
+    DeleteHistoryEntry {
+        /// The ID of the history entry to delete
+        id: String,
+    },
+
     // === Service Control ===
     /// Ping for health check
     Ping,

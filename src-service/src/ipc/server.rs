@@ -73,6 +73,9 @@ pub fn broadcast_event(event: Response) {
                 EventType::ModelDownloadComplete { success } => {
                     info!("Model download complete (no clients): success={}", success);
                 }
+                EventType::HistoryEntryDeleted { ref id } => {
+                    info!("History entry deleted (no clients): {}", id);
+                }
                 EventType::Shutdown => {
                     info!("Shutdown event (no clients)");
                 }

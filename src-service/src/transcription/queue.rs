@@ -36,7 +36,7 @@ pub trait TranscriptionCallback: Send + Sync + 'static {
     fn on_transcription_started(&self);
 
     /// Called when transcription completes successfully.
-    fn on_transcription_complete(&self, text: String);
+    fn on_transcription_complete(&self, text: String, wav_path: Option<String>);
 
     /// Called when transcription fails.
     fn on_transcription_error(&self, error: String);
@@ -174,6 +174,11 @@ impl TranscriptionQueue {
                             channels: seg.channels,
                         };
 
+                        let wav_path_str = seg
+                            .wav_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string());
+
                         // Convert to format suitable for Whisper
                         match process_recorded_audio(raw_audio) {
                             Ok(processed) => {
@@ -186,7 +191,7 @@ impl TranscriptionQueue {
                                 match transcriber.transcribe(&processed) {
                                     Ok(text) => {
                                         if let Some(ref cb) = *callback.lock().unwrap() {
-                                            cb.on_transcription_complete(text);
+                                            cb.on_transcription_complete(text, wav_path_str);
                                         }
                                     }
                                     Err(e) => {

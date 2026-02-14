@@ -11,11 +11,24 @@ The application SHALL display a dark gray gradient background across the entire 
 - **THEN** the background displays a smooth dark gray gradient
 
 ### Requirement: Fixed Window Size
-The main application window SHALL be non-resizable with a fixed compact size of 800x300 pixels.
+The main application window SHALL be resizable with a default compact size of 900x340 pixels and a minimum size of 600x300 pixels. All content and components SHALL resize within the window, maintaining their position and margins relative to the window edges.
 
-#### Scenario: User attempts to resize main window
-- **WHEN** the user attempts to resize the main window by dragging edges or corners
-- **THEN** the window remains at its fixed 800x300 size
+#### Scenario: Default window size on launch
+- **WHEN** the application window opens for the first time
+- **THEN** the window displays at 900x340 pixels
+
+#### Scenario: User resizes main window
+- **WHEN** the user drags the edges or corners of the main window
+- **THEN** the window resizes freely in both dimensions and all content adapts to the new size
+
+#### Scenario: Minimum size enforced
+- **WHEN** the user attempts to resize the main window below 600x300 pixels
+- **THEN** the window stops resizing and maintains at least 600x300 dimensions
+
+#### Scenario: Content maintains relative layout on resize
+- **WHEN** the main window is resized
+- **THEN** the header, controls bar, and transcription area maintain their relative positions and margins to the window edges
+- **AND** the transcription area expands or contracts to fill available space
 
 ### Requirement: No Title Bar
 The application window SHALL display without a native title bar (window decorations disabled).
@@ -71,10 +84,10 @@ The system SHALL provide a separate resizable window for displaying audio visual
 - **THEN** the existing visualization window is focused instead of opening a new window
 
 ### Requirement: Mini Waveform Display
-The main window SHALL display a miniature real-time waveform visualization in the header area next to the application logo.
+The main window SHALL display a miniature real-time waveform visualization in the header area next to the application logo. The mini waveform SHALL only be visible when audio recording or capture is active.
 
 #### Scenario: Mini waveform position and alignment
-- **WHEN** the main window renders
+- **WHEN** the main window renders and audio capture is active
 - **THEN** the mini waveform appears immediately to the right of the logo, vertically centered with the logo
 
 #### Scenario: Mini waveform size
@@ -89,9 +102,17 @@ The main window SHALL display a miniature real-time waveform visualization in th
 - **WHEN** audio monitoring or transcription is active
 - **THEN** the mini waveform displays scrolling audio amplitude in real-time, matching the time window of the full waveform (~80ms)
 
-#### Scenario: Mini waveform idle state
-- **WHEN** audio monitoring is not active
-- **THEN** the mini waveform displays a flat gray line or empty state
+#### Scenario: Mini waveform hidden when idle
+- **WHEN** audio capture is not active (no PTT key held, no automatic speech capture in progress)
+- **THEN** the mini waveform is not visible (hidden via CSS display none)
+
+#### Scenario: Mini waveform becomes visible on capture start
+- **WHEN** audio capture begins (PTT key pressed or transcribe mode activated)
+- **THEN** the mini waveform becomes visible and begins animating
+
+#### Scenario: Mini waveform hides on capture stop
+- **WHEN** audio capture stops (PTT key released and transcription completes, or transcribe mode deactivated)
+- **THEN** the mini waveform is hidden
 
 #### Scenario: Mini waveform opens visualization window
 - **WHEN** the user double-clicks the mini waveform

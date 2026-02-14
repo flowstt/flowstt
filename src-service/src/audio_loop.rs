@@ -221,12 +221,22 @@ impl TranscriptionCallback for TranscriptionEventBroadcaster {
         debug!("[Transcription] Started");
     }
 
-    fn on_transcription_complete(&self, text: String) {
+    fn on_transcription_complete(&self, text: String, wav_path: Option<String>) {
         info!("[Transcription] Complete: {}", text);
+
+        // Add to persistent history and get the enriched entry
+        let history = crate::history::get_history();
+        let entry = {
+            let mut h = history.lock().unwrap();
+            h.add_entry(text.clone(), wav_path)
+        };
+
         broadcast_event(Response::Event {
             event: EventType::TranscriptionComplete(TranscriptionResult {
-                text,
-                audio_path: None,
+                id: Some(entry.id),
+                text: entry.text,
+                timestamp: Some(entry.timestamp),
+                audio_path: entry.wav_path,
             }),
         });
     }

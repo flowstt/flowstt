@@ -271,6 +271,48 @@ async fn get_ptt_status(state: State<'_, AppState>) -> Result<LocalPttStatus, St
     }
 }
 
+/// History entry struct for frontend compatibility
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LocalHistoryEntry {
+    id: String,
+    text: String,
+    timestamp: String,
+    wav_path: Option<String>,
+}
+
+/// Get transcription history
+#[tauri::command]
+async fn get_history(state: State<'_, AppState>) -> Result<Vec<LocalHistoryEntry>, String> {
+    let response = send_request(&state.ipc, Request::GetHistory).await?;
+
+    match response {
+        Response::History { entries } => Ok(entries
+            .into_iter()
+            .map(|e| LocalHistoryEntry {
+                id: e.id,
+                text: e.text,
+                timestamp: e.timestamp,
+                wav_path: e.wav_path,
+            })
+            .collect()),
+        Response::Error { message } => Err(message),
+        _ => Err("Unexpected response".into()),
+    }
+}
+
+/// Delete a history entry
+#[tauri::command]
+async fn delete_history_entry(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let response =
+        send_request(&state.ipc, Request::DeleteHistoryEntry { id }).await?;
+
+    match response {
+        Response::Ok => Ok(()),
+        Response::Error { message } => Err(message),
+        _ => Err("Unexpected response".into()),
+    }
+}
+
 /// Log a startup diagnostic message from the frontend to stderr.
 /// This ensures all startup timing is visible in a single stream (the terminal).
 #[tauri::command]
@@ -424,6 +466,8 @@ pub fn run() {
             set_transcription_mode,
             set_ptt_hotkeys,
             get_ptt_status,
+            get_history,
+            delete_history_entry,
             connect_events,
         ])
         .run(tauri::generate_context!())

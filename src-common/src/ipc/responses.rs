@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    AudioDevice, ConfigValues, CudaStatus, ModelStatus, PttStatus, TranscribeStatus,
+    AudioDevice, ConfigValues, CudaStatus, HistoryEntry, ModelStatus, PttStatus, TranscribeStatus,
     TranscriptionResult, VisualizationData,
 };
 
@@ -29,6 +29,9 @@ pub enum Response {
 
     /// Persisted configuration values
     ConfigValues(ConfigValues),
+
+    /// Transcription history entries
+    History { entries: Vec<HistoryEntry> },
 
     /// Subscribed to events
     Subscribed,
@@ -89,6 +92,12 @@ pub enum EventType {
     TranscriptionModeChanged {
         /// The new transcription mode
         mode: crate::types::TranscriptionMode,
+    },
+
+    /// A history entry was deleted
+    HistoryEntryDeleted {
+        /// The ID of the deleted entry
+        id: String,
     },
 
     /// Service is shutting down
