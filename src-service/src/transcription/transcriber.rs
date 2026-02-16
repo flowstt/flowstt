@@ -126,6 +126,9 @@ impl Transcriber {
         // Post-process to remove hallucination loops
         let result = Self::remove_repetition_loops(&result);
 
+        // Replace "Flow STT" with "FlowSTT" in transcribed text
+        let result = result.replace("Flow STT", "FlowSTT");
+
         if result.is_empty() {
             Ok("(No speech detected)".to_string())
         } else {
@@ -183,6 +186,9 @@ impl Transcriber {
 
         // Post-process to remove hallucination loops
         let result = Self::remove_repetition_loops(&result);
+
+        // Replace "Flow STT" with "FlowSTT" in transcribed text
+        let result = result.replace("Flow STT", "FlowSTT");
 
         if result.is_empty() {
             Ok("(No speech detected)".to_string())
