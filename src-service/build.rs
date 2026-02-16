@@ -42,12 +42,12 @@ fn main() {
         .unwrap_or_else(|| out_dir.join("whisper-cache"));
 
     // Determine which binary to download and which libraries to extract
-    // When CUDA feature is enabled on Windows x64, use CUDA-enabled binaries
+    // Windows x64 always uses CUDA-enabled binaries (automatic CPU fallback when no GPU)
     let (zip_name, lib_names): (&str, Vec<&str>) = match (target_os.as_str(), target_arch.as_str())
     {
-        ("windows", "x86_64") if cuda_enabled => {
+        ("windows", "x86_64") => {
             println!(
-                "cargo:warning=CUDA feature enabled - using CUDA-accelerated whisper.cpp binaries"
+                "cargo:warning=Using CUDA-accelerated whisper.cpp binaries (auto CPU fallback)"
             );
             (
                 "whisper-cublas-12.4.0-bin-x64.zip",
@@ -68,19 +68,10 @@ fn main() {
                 ],
             )
         }
-        ("windows", "x86_64") => (
-            "whisper-bin-x64.zip",
+        ("windows", "x86") => (
+            "whisper-bin-Win32.zip",
             vec!["whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll"],
         ),
-        ("windows", "x86") => {
-            if cuda_enabled {
-                println!("cargo:warning=CUDA feature is not supported on Windows x86 - using CPU-only build");
-            }
-            (
-                "whisper-bin-Win32.zip",
-                vec!["whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll"],
-            )
-        }
         ("macos", _) => {
             if cuda_enabled {
                 println!("cargo:warning=CUDA feature has no effect on macOS - using Metal acceleration via prebuilt framework");

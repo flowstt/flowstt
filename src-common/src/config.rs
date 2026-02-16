@@ -13,18 +13,13 @@ use std::path::PathBuf;
 use crate::types::{HotkeyCombination, KeyCode, TranscriptionMode};
 
 /// Theme mode for the application UI.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeMode {
+    #[default]
     Auto,
     Light,
     Dark,
-}
-
-impl Default for ThemeMode {
-    fn default() -> Self {
-        ThemeMode::Auto
-    }
 }
 
 /// Service configuration that persists across restarts.

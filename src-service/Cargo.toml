@@ -13,7 +13,8 @@ default = []
 # Enable CUDA GPU acceleration for transcription
 # - Linux: Requires NVIDIA CUDA Toolkit (nvcc, cuBLAS) installed at build time
 #          whisper.cpp is built from source with -DGGML_CUDA=ON
-# - Windows: Uses prebuilt CUDA binaries (no build-time dependencies, ~457MB download)
+# - Windows: CUDA binaries are ALWAYS used (automatic CPU fallback when no GPU available)
+#            This feature has no effect on Windows
 # - macOS: No effect (uses Metal acceleration via prebuilt framework)
 cuda = []
 

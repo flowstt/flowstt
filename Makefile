@@ -45,7 +45,7 @@ service-release:
 
 # Build flowstt-service with CUDA acceleration (release)
 # Requires: NVIDIA CUDA Toolkit (nvcc, cuBLAS) on Linux
-#           On Windows, prebuilt CUDA binaries are downloaded automatically
+#           On Windows, CUDA binaries are always used (this has no additional effect)
 #           On macOS, this has no effect (Metal acceleration is always used)
 service-cuda:
 	@echo "==> Building flowstt-service with CUDA (release)..."
@@ -228,5 +228,5 @@ help:
 	@echo "CUDA Acceleration:"
 	@echo "  The 'cuda' targets enable GPU-accelerated transcription via whisper.cpp."
 	@echo "  - Linux: Requires NVIDIA CUDA Toolkit (nvcc, cuBLAS) at build time"
-	@echo "  - Windows: Uses prebuilt CUDA binaries (downloaded automatically)"
+	@echo "  - Windows: CUDA binaries always used (auto CPU fallback when no GPU)"
 	@echo "  - macOS: No effect (Metal acceleration is always used)"

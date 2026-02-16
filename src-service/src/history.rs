@@ -160,7 +160,7 @@ impl TranscriptionHistory {
         if let Ok(entries) = fs::read_dir(&recordings_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "wav") {
+                if path.extension().is_some_and(|ext| ext == "wav") {
                     if let Ok(metadata) = path.metadata() {
                         if let Ok(modified) = metadata.modified() {
                             if let Ok(age) = now.duration_since(modified) {

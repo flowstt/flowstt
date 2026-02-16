@@ -71,16 +71,6 @@
   --indicator-active-text: #3b82f6;
   --indicator-active-dot: #3b82f6;
 
-  --cuda-active-bg: rgba(118, 185, 0, 0.15);
-  --cuda-active-border: rgba(118, 185, 0, 0.4);
-  --cuda-active-text: #76b900;
-  --cuda-active-dot: #76b900;
-
-  --cuda-inactive-bg: rgba(255, 165, 0, 0.15);
-  --cuda-inactive-border: rgba(255, 165, 0, 0.4);
-  --cuda-inactive-text: #ffa500;
-  --cuda-inactive-dot: #ffa500;
-
   /* --- Warning / Model Download --- */
   --warning-bg: #3d3200;
   --warning-border: #ffc107;
@@ -220,16 +210,6 @@
   --indicator-active-border: rgba(37, 99, 235, 0.3);
   --indicator-active-text: #2563eb;
   --indicator-active-dot: #2563eb;
-
-  --cuda-active-bg: rgba(22, 163, 74, 0.1);
-  --cuda-active-border: rgba(22, 163, 74, 0.3);
-  --cuda-active-text: #16a34a;
-  --cuda-active-dot: #16a34a;
-
-  --cuda-inactive-bg: rgba(234, 179, 8, 0.1);
-  --cuda-inactive-border: rgba(234, 179, 8, 0.3);
-  --cuda-inactive-text: #ca8a04;
-  --cuda-inactive-dot: #ca8a04;
 
   /* --- Warning / Model Download --- */
   --warning-bg: #fefce8;

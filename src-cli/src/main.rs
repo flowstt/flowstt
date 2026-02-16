@@ -711,7 +711,7 @@ async fn handle_config_get(
             if matches!(cli.format, OutputFormat::Json) {
                 println!(
                     "{}",
-                    serde_json::to_value(&values.transcription_mode)
+                    serde_json::to_value(values.transcription_mode)
                         .map_err(|e| e.to_string())?
                 );
             } else {

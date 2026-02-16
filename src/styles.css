@@ -205,57 +205,6 @@ img {
   }
 }
 
-/* CUDA indicator */
-.cuda-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  background: var(--indicator-inactive-bg);
-  border: 1px solid var(--indicator-inactive-border);
-  color: var(--indicator-inactive-text);
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  cursor: help;
-  white-space: pre-line;
-}
-
-/* CUDA active state - GPU acceleration available */
-.cuda-indicator.active {
-  background: var(--cuda-active-bg);
-  border-color: var(--cuda-active-border);
-  color: var(--cuda-active-text);
-}
-
-/* CUDA inactive state - built with CUDA but GPU not detected */
-.cuda-indicator.inactive {
-  background: var(--cuda-inactive-bg);
-  border-color: var(--cuda-inactive-border);
-  color: var(--cuda-inactive-text);
-}
-
-.cuda-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--indicator-dot-inactive);
-}
-
-.cuda-indicator.active .cuda-dot {
-  background: var(--cuda-active-dot);
-}
-
-.cuda-indicator.inactive .cuda-dot {
-  background: var(--cuda-inactive-dot);
-}
-
-.cuda-label {
-  line-height: 1;
-}
-
 h2 {
   font-size: 0.9rem;
   margin: 0 0 0.25rem 0;

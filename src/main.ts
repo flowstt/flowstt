@@ -20,12 +20,6 @@ interface ModelStatus {
   path: string;
 }
 
-interface CudaStatus {
-  build_enabled: boolean;
-  runtime_available: boolean;
-  system_info: string;
-}
-
 // CaptureStatus matches backend TranscribeStatus
 interface CaptureStatus {
   capturing: boolean;
@@ -76,9 +70,6 @@ let captureStateChangedUnlisten: UnlistenFn | null = null;
 let historyEntryDeletedUnlisten: UnlistenFn | null = null;
 
 let miniWaveformRenderer: MiniWaveformRenderer | null = null;
-
-// CUDA indicator
-let cudaIndicator: HTMLElement | null = null;
 
 async function checkModelStatus() {
   try {
@@ -383,32 +374,6 @@ function playSegmentAudio(wavPath: string, btn: HTMLButtonElement): void {
   });
 }
 
-// ============== CUDA Status ==============
-
-async function checkCudaStatus() {
-  try {
-    const status = await invoke<CudaStatus>("get_cuda_status");
-
-    if (cudaIndicator) {
-      if (status.build_enabled) {
-        cudaIndicator.classList.remove("hidden");
-        if (status.runtime_available) {
-          cudaIndicator.title = `CUDA GPU Acceleration Active\n${status.system_info}`;
-          cudaIndicator.classList.add("active");
-        } else {
-          cudaIndicator.title = `CUDA Built but NOT Active (GPU not detected)\n${status.system_info}`;
-          cudaIndicator.classList.add("inactive");
-        }
-      } else {
-        cudaIndicator.classList.add("hidden");
-      }
-    }
-
-  } catch (error) {
-    console.error("Failed to check CUDA status:", error);
-  }
-}
-
 // ============== Window Management ==============
 
 async function openVisualizationWindow() {
@@ -554,7 +519,6 @@ window.addEventListener("DOMContentLoaded", () => {
   downloadStatusEl = document.querySelector("#download-status");
   miniWaveformCanvas = document.querySelector("#mini-waveform");
   closeBtn = document.querySelector("#close-btn");
-  cudaIndicator = document.querySelector("#cuda-indicator");
 
   // Swap logo image based on theme
   const appLogo = document.querySelector<HTMLImageElement>(".app-logo");
@@ -608,7 +572,6 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("visibilitychange", async () => {
     if (!document.hidden) {
       checkModelStatus();
-      checkCudaStatus();
       try {
         const status = await invoke<CaptureStatus>("get_status");
         isCapturing = status.capturing;
@@ -684,7 +647,6 @@ async function initializeApp() {
 
   if (!setupActive) {
     checkModelStatus();
-    checkCudaStatus();
 
     // Load transcription history from service
     await loadHistory();
@@ -711,7 +673,6 @@ async function initializeApp() {
     await listen("setup-complete", async () => {
       startupLog("setup-complete received - refreshing state");
       await checkModelStatus();
-      await checkCudaStatus();
       try {
         const status = await invoke<CaptureStatus>("get_status");
         isCapturing = status.capturing;

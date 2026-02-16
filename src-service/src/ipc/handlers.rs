@@ -532,9 +532,13 @@ pub async fn handle_request(request: Request) -> Response {
 
         Request::GetCudaStatus => {
             // Check build-time CUDA support
-            #[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "cuda"))]
+            // Windows always uses CUDA binaries (auto CPU fallback when no GPU)
+            #[cfg(target_os = "windows")]
             let build_enabled = true;
-            #[cfg(not(all(any(target_os = "linux", target_os = "windows"), feature = "cuda")))]
+            // Linux requires cuda feature flag (CUDA toolkit at build time)
+            #[cfg(all(target_os = "linux", feature = "cuda"))]
+            let build_enabled = true;
+            #[cfg(all(target_os = "linux", not(feature = "cuda")))]
             let build_enabled = false;
 
             // Get system info from whisper.cpp
