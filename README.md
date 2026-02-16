@@ -8,6 +8,8 @@
 
 FlowSTT is a free, privacy-first speech-to-text application that runs entirely on your local machine. No subscriptions, no signups, no cloud services —- your voice data never leaves your computer.
 
+![FlowSTT Screenshot](images/flowstt-screenshot.png)
+
 ## Features
 
 - **Local transcription** — Offline Whisper inference via whisper.cpp
