@@ -8,7 +8,7 @@
         run-cli run-cli-release \
         lint lint-rust lint-ts test \
         install-deps check-binaries help \
-        package package-release prepare-binaries
+        package package-release
 
 # Default target
 all: build
@@ -61,7 +61,7 @@ app-debug:
 	cargo build -p flowstt-app
 
 # Build flowstt-app/Tauri GUI (release)
-app-release:
+app-release: service-release cli-release
 	@echo "==> Building flowstt-app (release)..."
 	cargo build -p flowstt-app --release
 
@@ -185,22 +185,8 @@ check-binaries:
 # Packaging
 # =============================================================================
 
-# Prepare binaries for bundling (copy to src-tauri/binaries/)
-prepare-binaries: build-release
-	@echo "==> Preparing binaries for bundling..."
-	@mkdir -p src-tauri/binaries
-ifeq ($(OS),Windows_NT)
-	@cp target/release/flowstt-service.exe src-tauri/binaries/flowstt-service.exe
-	@cp target/release/flowstt.exe src-tauri/binaries/flowstt.exe
-else
-	@cp target/release/flowstt-service src-tauri/binaries/flowstt-service
-	@cp target/release/flowstt src-tauri/binaries/flowstt
-	@chmod +x src-tauri/binaries/flowstt-service src-tauri/binaries/flowstt
-endif
-	@echo "==> Binaries prepared in src-tauri/binaries/"
-
 # Package the application (build installers)
-package: prepare-binaries
+package: build-release
 	@echo "==> Building Tauri application package..."
 	pnpm tauri build
 	@echo "==> Package complete!"
