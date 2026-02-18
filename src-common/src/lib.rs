@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 
 pub mod config;
 pub mod ipc;
+pub mod logging;
 pub mod security;
 pub mod types;
 

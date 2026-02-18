@@ -9,7 +9,7 @@ mod tray;
 
 use flowstt_common::config::{Config, ThemeMode};
 use flowstt_common::ipc::{Request, Response};
-use flowstt_common::{runtime_mode, AudioDevice, HotkeyCombination, RecordingMode, TranscriptionMode};
+use flowstt_common::{runtime_mode, AudioDevice, HotkeyCombination, RecordingMode, RuntimeMode, TranscriptionMode};
 use ipc_client::{IpcClient, SharedIpcClient};
 use std::env;
 use std::sync::Arc;
@@ -18,6 +18,8 @@ use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::WebviewUrl;
 use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::EnvFilter;
 
 /// Detect if running on Wayland and set workaround env vars (Linux-specific)
 #[cfg(target_os = "linux")]
@@ -42,6 +44,73 @@ fn configure_wayland_workarounds() {
     // No-op on non-Linux platforms
 }
 
+/// Initialize logging based on runtime mode.
+///
+/// In production mode: logs to file with rotation.
+/// In development mode: logs to console.
+fn init_logging() {
+    let mode = runtime_mode();
+
+    match mode {
+        RuntimeMode::Production => {
+            // Ensure log directory exists
+            if let Err(e) = flowstt_common::logging::ensure_log_dir() {
+                eprintln!("Warning: Failed to create log directory, using temp dir: {}", e);
+            }
+
+            let log_path = flowstt_common::logging::app_log_path();
+            let log_dir = log_path.parent().unwrap();
+
+            // Create rolling file appender (rotates daily, max 5 files)
+            let file_appender = match tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .max_log_files(5)
+                .filename_prefix("flowstt-app")
+                .filename_suffix("log")
+                .build(log_dir)
+            {
+                Ok(appender) => appender,
+                Err(e) => {
+                    eprintln!("Warning: Failed to create log file appender: {}", e);
+                    // Fall back to temp directory
+                    let temp_dir = std::env::temp_dir().join("flowstt-logs");
+                    let _ = std::fs::create_dir_all(&temp_dir);
+                    tracing_appender::rolling::RollingFileAppender::builder()
+                        .rotation(tracing_appender::rolling::Rotation::DAILY)
+                        .max_log_files(5)
+                        .filename_prefix("flowstt-app")
+                        .filename_suffix("log")
+                        .build(&temp_dir)
+                        .expect("Failed to create temp log file appender")
+                }
+            };
+
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            // Keep guard alive for the entire application lifetime
+            std::mem::forget(guard);
+
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+                )
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .init();
+
+            info!("Production logging initialized");
+        }
+        RuntimeMode::Development => {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+                )
+                .init();
+
+            debug!("Development logging initialized (console only)");
+        }
+    }
+}
+
 /// Application state shared between Tauri commands.
 struct AppState {
     /// Shared IPC client for communication with the service
@@ -56,10 +125,7 @@ async fn send_request(ipc: &SharedIpcClient, request: Request) -> Result<Respons
     let mut client = ipc.client.lock().await;
     let lock_ms = t0.elapsed().as_millis();
     if lock_ms > 5 {
-        eprintln!(
-            "[Startup] send_request: waited {}ms for ipc lock",
-            lock_ms
-        );
+        debug!("[Startup] send_request: waited {}ms for ipc lock", lock_ms);
     }
     client
         .request(request)
@@ -494,11 +560,23 @@ async fn stop_test_audio_device(state: State<'_, AppState>) -> Result<(), String
     }
 }
 
-/// Log a startup diagnostic message from the frontend to stderr.
-/// This ensures all startup timing is visible in a single stream (the terminal).
+/// Log a startup diagnostic message from the frontend.
+/// In production mode, writes to the log file. In development mode, writes to stderr.
 #[tauri::command]
 fn startup_log(message: String) {
-    eprintln!("[Startup/JS] {}", message);
+    info!("[Startup/JS] {}", message);
+}
+
+/// Log a message from the frontend to the log file.
+#[tauri::command]
+fn log_to_file(level: String, message: String) {
+    match level.as_str() {
+        "error" => error!("{}", message),
+        "warn" => warn!("{}", message),
+        "info" => info!("{}", message),
+        "debug" => debug!("{}", message),
+        _ => info!("{}", message),
+    }
 }
 
 /// Connect to the service and start event forwarding.
@@ -513,14 +591,14 @@ fn startup_log(message: String) {
 #[tauri::command]
 async fn connect_events(state: State<'_, AppState>, app_handle: AppHandle) -> Result<(), String> {
     let t0 = Instant::now();
-    eprintln!("[Startup] connect_events: begin");
+    info!("[Startup] connect_events: begin");
 
     // Eagerly connect the shared request/response client first. This ensures
     // it has an established connection before the event task's connection
     // attempt consumes the next available pipe instance.
     {
         let mut client = state.ipc.client.lock().await;
-        eprintln!(
+        debug!(
             "[Startup] connect_events: acquired ipc lock (+{}ms)",
             t0.elapsed().as_millis()
         );
@@ -528,7 +606,7 @@ async fn connect_events(state: State<'_, AppState>, app_handle: AppHandle) -> Re
             .connect_or_spawn()
             .await
             .map_err(|e| format!("IPC connection error: {}", e))?;
-        eprintln!(
+        debug!(
             "[Startup] connect_events: shared client connected (+{}ms)",
             t0.elapsed().as_millis()
         );
@@ -536,7 +614,7 @@ async fn connect_events(state: State<'_, AppState>, app_handle: AppHandle) -> Re
 
     // Now start event forwarding with its own dedicated connection
     start_event_forwarding(app_handle, state.event_task_running.clone()).await;
-    eprintln!(
+    info!(
         "[Startup] connect_events: done (+{}ms)",
         t0.elapsed().as_millis()
     );
@@ -550,7 +628,7 @@ async fn start_event_forwarding(app_handle: AppHandle, running: Arc<Mutex<bool>>
     {
         let is_running = running.lock().await;
         if *is_running {
-            eprintln!("[Startup] start_event_forwarding: already running, skipping");
+            debug!("[Startup] start_event_forwarding: already running, skipping");
             return;
         }
     }
@@ -565,13 +643,13 @@ async fn start_event_forwarding(app_handle: AppHandle, running: Arc<Mutex<bool>>
     let running_clone = running.clone();
     tokio::spawn(async move {
         let t0 = Instant::now();
-        eprintln!("[Startup] EventForwarder task: begin");
+        info!("[Startup] EventForwarder task: begin");
 
         // Create a dedicated client for event streaming
         let mut event_client = IpcClient::new();
 
         if let Err(e) = event_client.connect_or_spawn().await {
-            eprintln!(
+            error!(
                 "[Startup] EventForwarder task: connect FAILED (+{}ms): {}",
                 t0.elapsed().as_millis(),
                 e
@@ -580,14 +658,14 @@ async fn start_event_forwarding(app_handle: AppHandle, running: Arc<Mutex<bool>>
             *is_running = false;
             return;
         }
-        eprintln!(
+        info!(
             "[Startup] EventForwarder task: connected (+{}ms)",
             t0.elapsed().as_millis()
         );
 
         // This will run until the connection is closed
         if let Err(e) = event_client.subscribe_and_forward(app_handle).await {
-            eprintln!("[EventForwarder] Event stream ended: {}", e);
+            warn!("[EventForwarder] Event stream ended: {}", e);
         }
 
         // Mark as not running
@@ -599,7 +677,11 @@ async fn start_event_forwarding(app_handle: AppHandle, running: Arc<Mutex<bool>>
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_t0 = Instant::now();
-    eprintln!("[Startup] run() entered");
+    
+    // Initialize logging based on runtime mode
+    init_logging();
+    
+    info!("[Startup] run() entered");
     configure_wayland_workarounds();
 
     tauri::Builder::default()
@@ -608,7 +690,7 @@ pub fn run() {
             event_task_running: Arc::new(Mutex::new(false)),
         })
         .setup(move |app| {
-            eprintln!(
+            debug!(
                 "[Startup] setup() hook called (+{}ms from run())",
                 app_t0.elapsed().as_millis()
             );
@@ -617,25 +699,25 @@ pub fn run() {
             let app_handle = app.handle().clone();
             match binaries::extract_all_binaries(&app_handle) {
                 Ok(extracted) => {
-                    eprintln!(
+                    debug!(
                         "[Startup] Extracted binaries: service={:?}, cli={:?}",
                         extracted.service, extracted.cli
                     );
                 }
                 Err(e) => {
                     // This is expected in development mode - binaries won't be in resources
-                    eprintln!("[Startup] Binary extraction skipped (dev mode or not bundled): {}", e);
+                    debug!("[Startup] Binary extraction skipped (dev mode or not bundled): {}", e);
                 }
             }
 
             // Set up the system tray
             if let Err(e) = tray::setup_tray(app) {
-                eprintln!("[FlowSTT] Failed to set up system tray: {}", e);
+                warn!("[FlowSTT] Failed to set up system tray: {}", e);
             }
 
             // First-run detection: show setup wizard if no config exists
             if Config::needs_setup() {
-                eprintln!("[Startup] First run detected - showing setup wizard");
+                info!("[Startup] First run detected - showing setup wizard");
 
                 // Hide the main window (it starts hidden via tauri.conf.json,
                 // but ensure it stays hidden)
@@ -663,7 +745,7 @@ pub fn run() {
                 // Listen for setup completion
                 let app_handle = app.handle().clone();
                 app.listen("setup-complete", move |_event| {
-                    eprintln!("[Startup] Setup complete - transitioning to main window");
+                    info!("[Startup] Setup complete - transitioning to main window");
 
                     // Close the setup window
                     if let Some(setup_win) = app_handle.get_webview_window("setup") {
@@ -678,7 +760,7 @@ pub fn run() {
                 });
             }
 
-            eprintln!(
+            debug!(
                 "[Startup] setup() hook done (+{}ms from run())",
                 app_t0.elapsed().as_millis()
             );
@@ -698,6 +780,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             startup_log,
+            log_to_file,
             list_all_sources,
             set_sources,
             set_aec_enabled,

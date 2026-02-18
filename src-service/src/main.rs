@@ -23,7 +23,7 @@ pub use audio_loop::{
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Global shutdown flag
@@ -47,16 +47,122 @@ pub fn is_shutdown_requested() -> bool {
     get_shutdown_flag().load(Ordering::SeqCst)
 }
 
+/// Initialize logging based on runtime mode.
+///
+/// In production mode: logs to file with rotation.
+/// In development mode: logs to console.
+fn init_logging() {
+    let mode = flowstt_common::runtime_mode();
+
+    match mode {
+        flowstt_common::RuntimeMode::Production => {
+            // Ensure log directory exists
+            if let Err(e) = flowstt_common::logging::ensure_log_dir() {
+                eprintln!("Warning: Failed to create log directory, using temp dir: {}", e);
+            }
+
+            let log_path = flowstt_common::logging::service_log_path();
+            let log_dir = log_path.parent().unwrap();
+
+            // Create rolling file appender (rotates daily, max 5 files)
+            let file_appender = match tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .max_log_files(5)
+                .filename_prefix("flowstt-service")
+                .filename_suffix("log")
+                .build(log_dir)
+            {
+                Ok(appender) => appender,
+                Err(e) => {
+                    eprintln!("Warning: Failed to create log file appender: {}", e);
+                    // Fall back to temp directory
+                    let temp_dir = std::env::temp_dir().join("flowstt-logs");
+                    let _ = std::fs::create_dir_all(&temp_dir);
+                    tracing_appender::rolling::RollingFileAppender::builder()
+                        .rotation(tracing_appender::rolling::Rotation::DAILY)
+                        .max_log_files(5)
+                        .filename_prefix("flowstt-service")
+                        .filename_suffix("log")
+                        .build(&temp_dir)
+                        .expect("Failed to create temp log file appender")
+                }
+            };
+
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            // Keep guard alive for the entire application lifetime
+            std::mem::forget(guard);
+
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+                )
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .init();
+
+            info!("Production logging initialized");
+        }
+        flowstt_common::RuntimeMode::Development => {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+                )
+                .init();
+
+            debug!("Development logging initialized (console only)");
+        }
+    }
+}
+
+/// Clean up old log files (older than 30 days, keep max 5 rotated files).
+fn cleanup_old_logs() {
+    let log_dir = flowstt_common::logging::log_dir();
+
+    if !log_dir.exists() {
+        return;
+    }
+
+    let retention_days = 30;
+    let now = std::time::SystemTime::now();
+    let retention_duration = std::time::Duration::from_secs(retention_days * 24 * 60 * 60);
+
+    let Ok(entries) = std::fs::read_dir(&log_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Skip the main log file
+        if path.file_name().map(|n| n.to_string_lossy().starts_with("flowstt-service.log"))
+            == Some(true)
+        {
+            continue;
+        }
+
+        // Check file age
+        if let Ok(metadata) = entry.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = now.duration_since(modified) {
+                    if elapsed > retention_duration {
+                        debug!("Removing old log file: {:?}", path);
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     // Check for --check-gpu flag for quick GPU diagnostics
     let check_gpu = std::env::args().any(|arg| arg == "--check-gpu");
 
-    // Initialize logging with RUST_LOG env var support
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // Initialize logging based on runtime mode
+    init_logging();
+
+    // Clean up old log files
+    cleanup_old_logs();
 
     // If --check-gpu, just initialize whisper and print GPU status, then exit
     if check_gpu {
