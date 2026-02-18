@@ -1,63 +1,14 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  release:
+    types: [created]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  validate-version:
-    runs-on: ubuntu-22.04
-    outputs:
-      version: ${{ steps.get-version.outputs.version }}
-    steps:
-      - name: Get version from tag
-        id: get-version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Tag version: $VERSION"
-
-      - name: Get latest release version
-        id: get-latest
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          LATEST=$(gh release view --repo ${{ github.repository }} --json tagName -q '.tagName' 2>/dev/null || echo "")
-          if [ -z "$LATEST" ]; then
-            echo "No previous release found. This will be the first release."
-            echo "latest=" >> $GITHUB_OUTPUT
-          else
-            LATEST_VERSION=${LATEST#v}
-            echo "Latest release version: $LATEST_VERSION"
-            echo "latest=$LATEST_VERSION" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Validate version increment
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          LATEST="${{ steps.get-latest.outputs.latest }}"
-
-          if [ -z "$LATEST" ]; then
-            echo "First release - no version comparison needed"
-            exit 0
-          fi
-
-          # Simple semver comparison using sort -V
-          HIGHER=$(printf '%s\n%s' "$LATEST" "$VERSION" | sort -V | tail -n1)
-
-          if [ "$HIGHER" = "$LATEST" ]; then
-            echo "Error: Version $VERSION is not greater than latest release $LATEST"
-            exit 1
-          fi
-
-          echo "Version $VERSION is greater than $LATEST - proceeding with release"
-
   test-and-lint:
-    needs: validate-version
     strategy:
       fail-fast: true
       matrix:
@@ -149,7 +100,7 @@ jobs:
         run: cargo test --all-features
 
   build-and-release:
-    needs: [validate-version, test-and-lint]
+    needs: [test-and-lint]
     permissions:
       contents: write
     strategy:
@@ -212,118 +163,16 @@ jobs:
             src-common -> target
             src-cli -> target
 
-      - name: Build service binary (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        working-directory: src-service
-        run: cargo build --release
-
-      - name: Build service binary (macOS)
-        if: matrix.platform == 'macos-latest'
-        working-directory: src-service
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-
-      - name: Build service binary (Windows)
-        if: matrix.platform == 'windows-latest'
-        working-directory: src-service
-        run: cargo build --release
-
-      - name: Build CLI binary (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        working-directory: src-cli
-        run: cargo build --release
-
-      - name: Build CLI binary (macOS)
-        if: matrix.platform == 'macos-latest'
-        working-directory: src-cli
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-
-      - name: Build CLI binary (Windows)
-        if: matrix.platform == 'windows-latest'
-        working-directory: src-cli
-        run: cargo build --release
-
-      - name: Prepare binaries for bundling (Unix)
-        if: matrix.platform != 'windows-latest'
-        run: |
-          mkdir -p src-tauri/binaries
-          if [ "${{ matrix.platform }}" = "macos-latest" ]; then
-            TARGET="${{ matrix.args }}"
-            TARGET=${TARGET#--target }
-            cp target/${TARGET}/release/flowstt-service src-tauri/binaries/flowstt-service
-            cp target/${TARGET}/release/flowstt src-tauri/binaries/flowstt
-          else
-            cp target/release/flowstt-service src-tauri/binaries/flowstt-service
-            cp target/release/flowstt src-tauri/binaries/flowstt
-          fi
-          chmod +x src-tauri/binaries/flowstt-service src-tauri/binaries/flowstt
-
-      - name: Prepare binaries for bundling (Windows)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          mkdir -p src-tauri/binaries
-          cp target/release/flowstt-service.exe src-tauri/binaries/flowstt-service.exe
-          cp target/release/flowstt.exe src-tauri/binaries/flowstt.exe
-
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v__VERSION__
-          releaseName: "FlowSTT v__VERSION__"
-          releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ github.event.release.id }}
           args: ${{ matrix.args }}
 
-      - name: Create Linux tar.gz archive
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          VERSION="${{ needs.validate-version.outputs.version }}"
-          ARCHIVE_NAME="flowstt-${VERSION}-linux-x86_64"
-
-          mkdir -p "$ARCHIVE_NAME/icons"
-
-          # Copy GUI app binary
-          cp src-tauri/target/release/flowstt-app "$ARCHIVE_NAME/"
-
-          # Copy CLI binary
-          cp target/release/flowstt "$ARCHIVE_NAME/"
-
-          # Copy service binary
-          cp target/release/flowstt-service "$ARCHIVE_NAME/"
-
-          # Copy icons
-          cp src-tauri/icons/128x128.png "$ARCHIVE_NAME/icons/"
-          cp src-tauri/icons/32x32.png "$ARCHIVE_NAME/icons/"
-
-          # Copy LICENSE if it exists
-          [ -f LICENSE ] && cp LICENSE "$ARCHIVE_NAME/"
-
-          # Create tar.gz
-          tar -czvf "${ARCHIVE_NAME}.tar.gz" "$ARCHIVE_NAME"
-
-          echo "Created ${ARCHIVE_NAME}.tar.gz"
-
-      - name: Upload Linux tar.gz to release
-        if: matrix.platform == 'ubuntu-22.04'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${{ needs.validate-version.outputs.version }}"
-          ARCHIVE_NAME="flowstt-${VERSION}-linux-x86_64.tar.gz"
-
-          # Wait for release to be created by tauri-action
-          sleep 10
-
-          gh release upload "v${VERSION}" "$ARCHIVE_NAME" --clobber || echo "Upload will be retried by tauri-action"
-
   generate-update-json:
-    needs: [validate-version, build-and-release]
+    needs: [build-and-release]
     permissions:
       contents: write
     runs-on: ubuntu-22.04
@@ -335,14 +184,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ needs.validate-version.outputs.version }}"
-          
-          # Get the release ID
-          RELEASE_ID=$(gh release view "v${VERSION}" --repo ${{ github.repository }} --json id -q '.id')
-          
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+
           # Get the release assets
-          ASSETS=$(gh release view "v${VERSION}" --repo ${{ github.repository }} --json assets -q '.assets')
-          
+          ASSETS=$(gh release view "${{ github.event.release.tag_name }}" --repo ${{ github.repository }} --json assets -q '.assets')
+
           # Build the update JSON
           # For now, we'll create a basic structure - the signature will need to be added when we have signing
           cat > latest.json << EOF
@@ -363,12 +210,11 @@ jobs:
             }
           }
           EOF
-          
+
           cat latest.json
 
       - name: Upload latest.json to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ needs.validate-version.outputs.version }}"
-          gh release upload "v${VERSION}" latest.json --clobber
+          gh release upload "${{ github.event.release.tag_name }}" latest.json --clobber
