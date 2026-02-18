@@ -8,7 +8,6 @@
 //! Native libraries (whisper, ggml) are also bundled alongside binaries
 //! so the service can find them at runtime.
 
-use std::io;
 use std::path::PathBuf;
 use tauri::Manager;
 
@@ -103,6 +102,7 @@ pub struct BundlePaths {
 
 /// Error when binaries are not found.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct BinariesNotFoundError {
     pub message: String,
 }
@@ -117,6 +117,7 @@ impl std::error::Error for BinariesNotFoundError {}
 
 /// Get paths to bundled binaries.
 /// Returns an error if binaries are not found (neither in bundle nor development).
+#[allow(dead_code)]
 pub fn get_bundle_paths(
     app_handle: &tauri::AppHandle,
 ) -> Result<BundlePaths, BinariesNotFoundError> {

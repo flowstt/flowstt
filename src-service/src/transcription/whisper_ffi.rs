@@ -250,12 +250,15 @@ pub enum WhisperSamplingStrategy {
 static WHISPER_LIB: OnceLock<Option<WhisperLibrary>> = OnceLock::new();
 
 /// Global ggml library handle (needed to load backends before whisper)
+#[cfg(not(target_os = "macos"))]
 static GGML_LIB: OnceLock<Option<GgmlLibrary>> = OnceLock::new();
 
 /// Opaque pointer to ggml_backend_reg
+#[cfg(not(target_os = "macos"))]
 type GgmlBackendReg = *mut std::ffi::c_void;
 
 /// Wrapper around the loaded ggml library (for backend loading)
+#[cfg(not(target_os = "macos"))]
 #[allow(dead_code)]
 struct GgmlLibrary {
     _lib: Library,
@@ -264,9 +267,12 @@ struct GgmlLibrary {
 }
 
 // SAFETY: The library handle and function pointers don't contain thread-local data
+#[cfg(not(target_os = "macos"))]
 unsafe impl Send for GgmlLibrary {}
+#[cfg(not(target_os = "macos"))]
 unsafe impl Sync for GgmlLibrary {}
 
+#[cfg(not(target_os = "macos"))]
 impl GgmlLibrary {
     /// Load the ggml library from the given path
     fn load<P: AsRef<Path>>(path: P) -> Result<Self, String> {
@@ -362,7 +368,7 @@ fn try_load_cuda_backend(ggml_lib: &GgmlLibrary, lib_dir: &Path) {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 #[allow(dead_code)]
 fn try_load_cuda_backend(_ggml_lib: &GgmlLibrary, _lib_dir: &Path) {
     // On non-Windows, CUDA backend loading is handled differently
