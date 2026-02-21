@@ -244,19 +244,6 @@ pub async fn handle_request(request: Request) -> Response {
             }
         }
 
-        Request::RegisterOwner => {
-            let state_arc = get_service_state();
-            let state = state_arc.lock().await;
-            
-            if state.runtime_mode != flowstt_common::RuntimeMode::Production {
-                info!("RegisterOwner rejected - not in production mode");
-                Response::OwnerRegistered { was_registered: false }
-            } else {
-                info!("RegisterOwner accepted - production mode");
-                Response::OwnerRegistered { was_registered: true }
-            }
-        }
-
         Request::ListDevices { source_type } => {
             let mut devices = Vec::new();
 
@@ -782,10 +769,16 @@ pub async fn handle_request(request: Request) -> Response {
             Response::Ok
         }
 
-        Request::SetAccessibilityPermissionGranted { granted } => {
-            hotkey::set_accessibility_permission_granted(granted);
-            info!("[Hotkey] Accessibility permission signal from GUI: granted={}", granted);
-            Response::Ok
+        Request::CheckAccessibilityPermission => {
+            let granted = hotkey::check_accessibility_permission();
+            info!("[Hotkey] Accessibility permission check: granted={}", granted);
+            Response::AccessibilityPermission { granted }
+        }
+
+        Request::RequestAccessibilityPermission => {
+            let granted = hotkey::request_accessibility_permission();
+            info!("[Hotkey] Accessibility permission requested: granted={}", granted);
+            Response::AccessibilityPermission { granted }
         }
 
         Request::Shutdown => {

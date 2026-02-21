@@ -6,7 +6,7 @@
 use flowstt_common::ipc::{
     get_socket_path, read_json, write_json, EventType, IpcError, Request, Response,
 };
-use flowstt_common::{runtime_mode, RuntimeMode};
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -31,8 +31,6 @@ pub struct IpcClient {
     stream: Option<tokio::net::UnixStream>,
     #[cfg(windows)]
     stream: Option<tokio::net::windows::named_pipe::NamedPipeClient>,
-    /// Whether this client spawned the service
-    spawned_service: bool,
 }
 
 impl IpcClient {
@@ -40,7 +38,6 @@ impl IpcClient {
     pub fn new() -> Self {
         Self {
             stream: None,
-            spawned_service: false,
         }
     }
 
@@ -48,12 +45,6 @@ impl IpcClient {
     #[allow(dead_code)]
     pub fn is_connected(&self) -> bool {
         self.stream.is_some()
-    }
-
-    /// Returns true if this client spawned the service.
-    #[allow(dead_code)]
-    pub fn spawned_service(&self) -> bool {
-        self.spawned_service
     }
 
     /// Connect to the service.
@@ -140,7 +131,6 @@ impl IpcClient {
             t0.elapsed().as_millis()
         );
         spawn_service()?;
-        self.spawned_service = true;
 
         // Wait for service to be ready (up to 5 seconds)
         for i in 0..50 {
@@ -218,58 +208,6 @@ impl IpcClient {
                 t0.elapsed().as_millis()
             );
             resp
-        }
-    }
-
-    /// Register this client as the service owner.
-    /// Only succeeds in production mode.
-    #[allow(dead_code)]
-    pub async fn register_owner(&mut self) -> Result<bool, IpcError> {
-        match self.request(Request::RegisterOwner).await? {
-            Response::OwnerRegistered { was_registered } => Ok(was_registered),
-            Response::Error { message } => Err(IpcError::ParseError(message)),
-            _ => Err(IpcError::ParseError("Unexpected response".into())),
-        }
-    }
-
-    /// Request service shutdown.
-    #[allow(dead_code)]
-    pub async fn shutdown(&mut self) -> Result<(), IpcError> {
-        match self.request(Request::Shutdown).await? {
-            Response::Ok => Ok(()),
-            Response::Error { message } => Err(IpcError::ParseError(message)),
-            _ => Err(IpcError::ParseError("Unexpected response".into())),
-        }
-    }
-
-    /// If in production mode and this client spawned the service, register as owner.
-    /// Returns true if successfully registered as owner.
-    #[allow(dead_code)]
-    pub async fn maybe_register_as_owner(&mut self) -> bool {
-        if !self.spawned_service {
-            return false;
-        }
-
-        let mode = runtime_mode();
-        if mode != RuntimeMode::Production {
-            return false;
-        }
-
-        match self.register_owner().await {
-            Ok(true) => {
-                eprintln!("[IpcClient] Registered as service owner");
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Shutdown the service if this client is the owner in production mode.
-    #[allow(dead_code)]
-    pub async fn shutdown_if_owner(&mut self) {
-        if self.spawned_service && runtime_mode() == RuntimeMode::Production {
-            eprintln!("[IpcClient] Shutting down spawned service...");
-            let _ = self.shutdown().await;
         }
     }
 

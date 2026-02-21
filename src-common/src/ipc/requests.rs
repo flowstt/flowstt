@@ -100,14 +100,15 @@ pub enum Request {
     StopTestAudioDevice,
 
     // === Platform Permissions ===
-    /// Notify the service that the GUI process has confirmed Accessibility permission is granted.
-    /// On macOS, the service binary may not have its own Accessibility trust entry (it is an
-    /// unsigned helper), so the GUI confirms permission on its behalf. The service uses this
-    /// signal to skip its own AXIsProcessTrusted() check and proceed directly to CGEventTapCreate.
-    SetAccessibilityPermissionGranted {
-        /// Whether the GUI process has confirmed Accessibility access is granted.
-        granted: bool,
-    },
+    /// Check whether the service process has macOS Accessibility permission.
+    /// On macOS, this calls AXIsProcessTrusted() in the service's own process context.
+    /// Returns true on non-macOS platforms (permission not applicable).
+    CheckAccessibilityPermission,
+    /// Request macOS Accessibility permission for the service process.
+    /// On macOS, this calls AXIsProcessTrustedWithOptions with the prompt flag,
+    /// which causes macOS to show a system dialog prompting the user to grant access
+    /// to the service binary. Returns the current trust state.
+    RequestAccessibilityPermission,
 
     // === Service Control ===
     /// Ping for health check
@@ -116,8 +117,6 @@ pub enum Request {
     Shutdown,
     /// Get the current runtime mode (development or production)
     GetRuntimeMode,
-    /// Register this client as the service owner (only succeeds in production mode)
-    RegisterOwner,
 }
 
 impl Request {

@@ -30,6 +30,12 @@ pub enum Response {
     /// Persisted configuration values
     ConfigValues(ConfigValues),
 
+    /// Accessibility permission status
+    AccessibilityPermission {
+        /// Whether the service process has Accessibility permission
+        granted: bool,
+    },
+
     /// Transcription history entries
     History { entries: Vec<HistoryEntry> },
 
@@ -44,9 +50,6 @@ pub enum Response {
 
     /// Current runtime mode (development or production)
     RuntimeMode { mode: String },
-
-    /// Owner registration result
-    OwnerRegistered { was_registered: bool },
 
     // === Error Response ===
     /// Error occurred

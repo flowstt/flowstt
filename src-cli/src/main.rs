@@ -220,16 +220,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         .await
         .map_err(|e| format!("Failed to connect to service: {}", e))?;
 
-    // Register as owner if in production mode and we spawned the service
-    client.maybe_register_as_owner().await;
-
-    // Run the command and store the result
-    let result = run_command(&mut client, &cli).await;
-
-    // Shutdown service if we're the owner in production mode
-    client.shutdown_if_owner().await;
-
-    result
+    // Run the command
+    run_command(&mut client, &cli).await
 }
 
 async fn run_command(client: &mut Client, cli: &Cli) -> Result<(), CliError> {

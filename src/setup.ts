@@ -466,12 +466,18 @@ async function initAccessibilityStep() {
   accessibilityStatusIcon.textContent = "⏳";
   accessibilityStatusLabel.textContent = "Waiting for permission...";
 
-  // Check once immediately in case permission was already granted
-  const alreadyGranted = await invoke<boolean>("check_accessibility_permission").catch(() => true);
+  // Check once immediately in case permission was already granted.
+  // The check runs in the service process (which is the one that needs the permission).
+  const alreadyGranted = await invoke<boolean>("check_accessibility_permission").catch(() => false);
   if (alreadyGranted) {
     onAccessibilityGranted();
     return;
   }
+
+  // Trigger the macOS accessibility prompt for the service process automatically.
+  // This calls AXIsProcessTrustedWithOptions with the prompt flag, which shows
+  // the system dialog asking the user to grant access to flowstt-service.
+  invoke("open_accessibility_settings").catch(() => {});
 
   // Poll every 500ms until permission is granted
   clearAccessibilityPoll();
@@ -489,9 +495,6 @@ function onAccessibilityGranted() {
   accessibilityStatusIcon.textContent = "✓";
   accessibilityStatusLabel.textContent = "Accessibility access granted!";
   nextBtn.disabled = false;
-  // Notify the service that the GUI has confirmed permission so it can skip its own
-  // AXIsProcessTrusted() check (which always returns false for unsigned helper binaries).
-  invoke("notify_accessibility_permission_granted", { granted: true }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -522,12 +525,6 @@ async function initTestStep() {
     await invoke("set_transcription_mode", { mode: transcriptionMode });
     if (transcriptionMode === "push_to_talk") {
       await invoke("set_ptt_hotkeys", { hotkeys: [pttHotkey] });
-      // Re-send the accessibility permission signal immediately before set_sources.
-      // The service's check fires during set_sources → start_capture → start_hotkey,
-      // so the flag must be set before that point.
-      if (isMacOS) {
-        await invoke("notify_accessibility_permission_granted", { granted: true }).catch(() => {});
-      }
     }
     await invoke("set_sources", {
       source1Id: selectedDeviceId,
