@@ -101,8 +101,6 @@ fn init_logging() {
 
 /// Application state shared between Tauri commands.
 struct AppState {
-    /// Whether the app was started in headless mode (--headless)
-    headless: bool,
     /// Handle to the IPC server task
     ipc_server_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -685,7 +683,6 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState {
-            headless,
             ipc_server_handle: Mutex::new(None),
         })
         .setup(move |app| {

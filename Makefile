@@ -72,7 +72,9 @@ cli: cli-release
 lint: lint-rust lint-ts
 
 # Rust linting (all crates)
-lint-rust:
+lint-rust: cli-release
+	@echo "==> Ensuring whisper library is cached..."
+	@cargo build -p flowstt-engine 2>/dev/null || true
 	@echo "==> Linting all Rust crates..."
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 

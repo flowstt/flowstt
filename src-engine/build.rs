@@ -141,6 +141,12 @@ fn main() {
     // Copy all libraries to target directory for runtime
     copy_libraries_to_runtime(&lib_output_dir, &lib_names, &out_dir);
 
+    // macOS: Also copy to release directory for Tauri bundling (even in debug builds)
+    // Tauri's build script validates bundle resources exist at configured paths
+    if target_os == "macos" {
+        copy_libraries_for_tauri_bundle(&lib_output_dir, &lib_names, &out_dir);
+    }
+
     // Also write the primary library path to a file for runtime discovery
     let lib_path_file = out_dir.join("whisper_lib_path.txt");
     fs::write(
@@ -462,6 +468,52 @@ fn copy_library_to_runtime(lib_path: &Path, lib_name: &str, out_dir: &Path) {
                     "cargo:warning=Copied {} to {}",
                     lib_name,
                     runtime_lib_dir.display()
+                );
+            }
+        }
+    }
+}
+
+/// Copy libraries to release directory for Tauri bundling (macOS)
+/// Tauri's build script validates bundle resources exist, even during debug builds
+fn copy_libraries_for_tauri_bundle(lib_dir: &Path, lib_names: &[&str], out_dir: &Path) {
+    let target_dir = out_dir
+        .ancestors()
+        .find(|p| p.file_name().map(|n| n == "target").unwrap_or(false))
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| out_dir.join("..").join("..").join(".."));
+
+    let release_lib_dir = target_dir.join("release");
+    if !release_lib_dir.exists() {
+        if let Err(e) = fs::create_dir_all(&release_lib_dir) {
+            println!(
+                "cargo:warning=Failed to create release directory for Tauri bundle: {}",
+                e
+            );
+            return;
+        }
+    }
+
+    for lib_name in lib_names {
+        let lib_path = lib_dir.join(lib_name);
+        let release_lib_path = release_lib_dir.join(lib_name);
+
+        if lib_path.exists()
+            && (!release_lib_path.exists()
+                || fs::metadata(&lib_path).map(|m| m.len()).unwrap_or(0)
+                    != fs::metadata(&release_lib_path)
+                        .map(|m| m.len())
+                        .unwrap_or(0))
+        {
+            if let Err(e) = fs::copy(&lib_path, &release_lib_path) {
+                println!(
+                    "cargo:warning=Failed to copy {} for Tauri bundle: {}",
+                    lib_name, e
+                );
+            } else {
+                println!(
+                    "cargo:warning=Copied {} to release/ for Tauri bundling",
+                    lib_name
                 );
             }
         }

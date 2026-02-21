@@ -593,14 +593,28 @@ pub fn init_library() -> Result<(), String> {
         // Search paths in order of preference:
         // 1. Next to the executable
         // 2. In the current directory
-        // 3. System library paths (handled by libloading)
-        let search_paths = [
+        // 3. macOS app bundle: Contents/Resources/ and Contents/Frameworks/
+        // 4. System library paths (handled by libloading)
+        let mut search_paths = vec![
             std::env::current_exe()
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.join(lib_name))),
             Some(std::env::current_dir().unwrap_or_default().join(lib_name)),
             Some(std::path::PathBuf::from(lib_name)),
         ];
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(exe_path) = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            {
+                // Contents/Resources/ - where Tauri bundles resources
+                search_paths.push(Some(exe_path.join("../Resources").join(lib_name)));
+                // Contents/Frameworks/ - standard macOS location
+                search_paths.push(Some(exe_path.join("../Frameworks").join(lib_name)));
+            }
+        }
 
         for path in search_paths.iter().flatten() {
             if path.exists() {
