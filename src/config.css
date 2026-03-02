@@ -242,3 +242,49 @@ select option {
 .hidden {
     display: none !important;
 }
+
+/* === Sections === */
+
+.config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.config-section-title {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--config-label-text);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 2px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-default);
+}
+
+/* === Checkbox fields === */
+
+.config-field--checkbox {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.config-field--checkbox label {
+    text-transform: none;
+    font-size: 0.82rem;
+    letter-spacing: 0;
+    font-weight: 400;
+    color: var(--text-primary);
+    cursor: pointer;
+    margin-left: 0;
+}
+
+.config-field--checkbox input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    flex-shrink: 0;
+    accent-color: var(--accent, #6c7fff);
+}

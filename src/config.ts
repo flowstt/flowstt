@@ -31,6 +31,15 @@ interface PttStatus {
   error: string | null;
 }
 
+interface ConfigValues {
+  transcription_mode: string;
+  ptt_hotkeys: HotkeyCombination[];
+  auto_toggle_hotkeys: HotkeyCombination[];
+  auto_paste_enabled: boolean;
+  auto_paste_delay_ms: number;
+  restore_clipboard_enabled: boolean;
+}
+
 // Display names for key codes (snake_case serde name -> display)
 const KEY_DISPLAY_NAMES: Record<string, string> = {
   // Modifiers
@@ -165,6 +174,7 @@ let recorderEl: HTMLDivElement;
 let recorderStatusEl: HTMLSpanElement;
 let warningEl: HTMLDivElement;
 let addHotkeyBtn: HTMLButtonElement;
+let restoreClipboardCheckbox: HTMLInputElement;
 // Toggle hotkey UI - disabled for now
 // let toggleHotkeyListEl: HTMLDivElement;
 // let toggleRecorderEl: HTMLDivElement;
@@ -574,11 +584,12 @@ function handleToggleRecordKeyUp(e: KeyboardEvent) { ... }
 
 async function loadState() {
   try {
-    const [devices, status, pttStatus, logLevel] = await Promise.all([
+    const [devices, status, pttStatus, logLevel, config] = await Promise.all([
       invoke<AudioDevice[]>("list_all_sources"),
       invoke<CaptureStatus>("get_status"),
       invoke<PttStatus>("get_ptt_status"),
       invoke<string>("get_log_level"),
+      invoke<ConfigValues>("get_config"),
     ]);
 
     allDevices = devices;
@@ -599,6 +610,8 @@ async function loadState() {
     if (logLevel) {
       logLevelSelect.value = logLevel;
     }
+
+    restoreClipboardCheckbox.checked = config.restore_clipboard_enabled;
 
     // Toggle hotkeys loading - disabled for now
     // toggleHotkeys = pttStatus.auto_toggle_hotkeys || [];
@@ -636,6 +649,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   recorderStatusEl = document.getElementById("recorder-status") as HTMLSpanElement;
   warningEl = document.getElementById("hotkey-warning") as HTMLDivElement;
   addHotkeyBtn = document.getElementById("add-hotkey-btn") as HTMLButtonElement;
+  restoreClipboardCheckbox = document.getElementById("restore-clipboard-checkbox") as HTMLInputElement;
   // Toggle hotkey UI - disabled for now
   // toggleHotkeyListEl = document.getElementById("toggle-hotkey-list") as HTMLDivElement;
   // toggleRecorderEl = document.getElementById("toggle-hotkey-recorder") as HTMLDivElement;
@@ -670,6 +684,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       await invoke("set_log_level", { level: logLevelSelect.value });
     } catch (error) {
       console.error("Failed to set log level:", error);
+    }
+  });
+
+  restoreClipboardCheckbox.addEventListener("change", async () => {
+    try {
+      await invoke("set_restore_clipboard", { enabled: restoreClipboardCheckbox.checked });
+    } catch (error) {
+      console.error("Failed to set restore clipboard:", error);
     }
   });
 

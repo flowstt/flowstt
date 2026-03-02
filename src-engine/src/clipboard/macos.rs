@@ -1,13 +1,23 @@
 //! macOS clipboard, foreground detection, and paste simulation.
 //!
 //! Uses:
-//! - `NSPasteboard` for clipboard write
+//! - `pbcopy`/`pbpaste` for clipboard read/write (plain text)
 //! - `NSWorkspace.shared.frontmostApplication` for foreground detection
-//! - `CGEvent` for Cmd+V paste simulation
+//! - `osascript` for Cmd+V paste simulation
+//!
+//! Note: Only plain text clipboard contents are saved and restored. Rich formats
+//! (HTML, RTF, images) are not supported via CLI tools. A future improvement
+//! could use `objc2` NSPasteboard bindings for full format fidelity.
 
 use super::ClipboardPaster;
 use std::process::Command;
 use tracing::debug;
+
+/// Platform-specific clipboard snapshot for macOS.
+pub struct ClipboardContents {
+    /// The plain text content of the clipboard at save time
+    pub text: String,
+}
 
 pub struct MacOSClipboardPaster;
 
@@ -68,4 +78,58 @@ impl ClipboardPaster for MacOSClipboardPaster {
         }
         Ok(())
     }
+
+    fn read_clipboard(&self) -> Option<super::ClipboardContents> {
+        read_clipboard_text()
+    }
+
+    fn restore_clipboard(&self, contents: &super::ClipboardContents) -> Result<(), String> {
+        restore_clipboard_text(contents)
+    }
+}
+
+/// Read the current plain-text clipboard content via `pbpaste`.
+fn read_clipboard_text() -> Option<ClipboardContents> {
+    let output = Command::new("pbpaste").output().ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if text.is_empty() {
+        return None;
+    }
+
+    debug!("[Clipboard] Saved clipboard text ({} chars)", text.len());
+    Some(ClipboardContents { text })
+}
+
+/// Restore clipboard text via `pbcopy`.
+fn restore_clipboard_text(contents: &ClipboardContents) -> Result<(), String> {
+    use std::io::Write;
+    let mut child = Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn pbcopy for restore: {}", e))?;
+
+    if let Some(ref mut stdin) = child.stdin {
+        stdin
+            .write_all(contents.text.as_bytes())
+            .map_err(|e| format!("Failed to write to pbcopy stdin: {}", e))?;
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for pbcopy restore: {}", e))?;
+
+    if !status.success() {
+        return Err(format!("pbcopy restore exited with status {}", status));
+    }
+
+    debug!(
+        "[Clipboard] Restored clipboard text ({} chars)",
+        contents.text.len()
+    );
+    Ok(())
 }

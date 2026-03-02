@@ -465,6 +465,9 @@ pub struct ConfigValues {
     /// Delay in milliseconds between clipboard write and paste simulation
     #[serde(default = "default_auto_paste_delay_ms")]
     pub auto_paste_delay_ms: u32,
+    /// Whether to save and restore clipboard contents around each transcription paste
+    #[serde(default = "default_restore_clipboard_enabled")]
+    pub restore_clipboard_enabled: bool,
 }
 
 fn default_auto_paste_enabled() -> bool {
@@ -473,6 +476,10 @@ fn default_auto_paste_enabled() -> bool {
 
 fn default_auto_paste_delay_ms() -> u32 {
     50
+}
+
+fn default_restore_clipboard_enabled() -> bool {
+    true
 }
 
 /// Push-to-talk status information.

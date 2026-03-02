@@ -410,6 +410,7 @@ pub async fn handle_request(request: Request) -> Response {
                 auto_toggle_hotkeys: state.auto_toggle_hotkeys.clone(),
                 auto_paste_enabled: config.auto_paste_enabled,
                 auto_paste_delay_ms: config.auto_paste_delay_ms,
+                restore_clipboard_enabled: config.restore_clipboard_enabled,
             })
         }
 
@@ -616,12 +617,14 @@ pub async fn handle_request(request: Request) -> Response {
         Request::GetAutoToggleHotkeys => {
             let state_arc = get_service_state();
             let state = state_arc.lock().await;
+            let config = crate::config::Config::load();
             Response::ConfigValues(ConfigValues {
                 transcription_mode: state.transcription_mode,
                 ptt_hotkeys: state.ptt_hotkeys.clone(),
                 auto_toggle_hotkeys: state.auto_toggle_hotkeys.clone(),
-                auto_paste_enabled: true,
-                auto_paste_delay_ms: 50,
+                auto_paste_enabled: config.auto_paste_enabled,
+                auto_paste_delay_ms: config.auto_paste_delay_ms,
+                restore_clipboard_enabled: config.restore_clipboard_enabled,
             })
         }
 
@@ -717,6 +720,17 @@ pub async fn handle_request(request: Request) -> Response {
             }
 
             info!("Auto-paste set to {}", enabled);
+            Response::Ok
+        }
+
+        Request::SetRestoreClipboard { enabled } => {
+            let mut config = crate::config::Config::load();
+            config.restore_clipboard_enabled = enabled;
+            if let Err(e) = crate::config::save_config(&config) {
+                warn!("Failed to save config: {}", e);
+            }
+
+            info!("Restore-clipboard set to {}", enabled);
             Response::Ok
         }
 

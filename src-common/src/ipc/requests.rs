@@ -80,6 +80,11 @@ pub enum Request {
         /// Whether auto-paste should be enabled
         enabled: bool,
     },
+    /// Enable or disable clipboard save/restore around transcription paste
+    SetRestoreClipboard {
+        /// Whether clipboard restore should be enabled
+        enabled: bool,
+    },
 
     // === History Management ===
     /// Get all transcription history entries

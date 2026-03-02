@@ -256,6 +256,7 @@ impl TranscriptionCallback for TranscriptionEventBroadcaster {
             &entry.text,
             config.auto_paste_enabled,
             config.auto_paste_delay_ms,
+            config.restore_clipboard_enabled,
         );
     }
 

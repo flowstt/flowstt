@@ -80,6 +80,9 @@ pub struct Config {
     /// Minimum log level for the tracing subscriber (default: info)
     #[serde(default)]
     pub log_level: LogLevel,
+    /// Whether to save and restore clipboard contents around each transcription paste
+    #[serde(default = "default_restore_clipboard_enabled")]
+    pub restore_clipboard_enabled: bool,
 }
 
 fn default_auto_toggle_hotkeys() -> Vec<HotkeyCombination> {
@@ -92,6 +95,10 @@ fn default_auto_paste_enabled() -> bool {
 
 fn default_auto_paste_delay_ms() -> u32 {
     50
+}
+
+fn default_restore_clipboard_enabled() -> bool {
+    true
 }
 
 /// Legacy configuration format for backward-compatible loading.
@@ -121,6 +128,8 @@ struct LegacyConfig {
     preferred_source2_id: Option<String>,
     /// Minimum log level (may be absent in old configs)
     log_level: Option<LogLevel>,
+    /// Whether clipboard restore is enabled (may be absent in old configs)
+    restore_clipboard_enabled: Option<bool>,
 }
 
 impl Config {
@@ -204,6 +213,7 @@ impl Config {
             preferred_source1_id: None,
             preferred_source2_id: None,
             log_level: LogLevel::default(),
+            restore_clipboard_enabled: true,
         }
     }
 
@@ -252,6 +262,7 @@ impl Config {
             preferred_source1_id: legacy.preferred_source1_id,
             preferred_source2_id: legacy.preferred_source2_id,
             log_level: legacy.log_level.unwrap_or_default(),
+            restore_clipboard_enabled: legacy.restore_clipboard_enabled.unwrap_or(true),
         }
     }
 }

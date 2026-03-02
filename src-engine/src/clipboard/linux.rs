@@ -1,13 +1,24 @@
 //! Linux clipboard, foreground detection, and paste simulation.
 //!
 //! Uses system CLI tools with graceful fallback:
-//! - Clipboard: `xclip` (X11) or `wl-copy` (Wayland)
+//! - Clipboard write: `wl-copy` (Wayland) or `xclip` (X11)
+//! - Clipboard read: `wl-paste` (Wayland) or `xclip -o` (X11)
 //! - Foreground: `xdotool getactivewindow getwindowpid` (X11) or best-effort
-//! - Paste: `xdotool key ctrl+v` (X11) or `wtype -M ctrl -k v` (Wayland)
+//! - Paste: `wtype -M ctrl -k v` (Wayland) or `xdotool key ctrl+v` (X11)
 
 use super::ClipboardPaster;
 use std::process::Command;
 use tracing::{debug, warn};
+
+/// Platform-specific clipboard snapshot for Linux.
+///
+/// Contains the plain text content of the clipboard at save time.
+/// Rich format fidelity is not achievable without a native clipboard daemon;
+/// text is the dominant use-case on Linux.
+pub struct ClipboardContents {
+    /// The plain text content of the clipboard at save time
+    pub text: String,
+}
 
 pub struct LinuxClipboardPaster;
 
@@ -54,6 +65,57 @@ impl ClipboardPaster for LinuxClipboardPaster {
             Ok(())
         }
     }
+
+    fn read_clipboard(&self) -> Option<super::ClipboardContents> {
+        read_clipboard_text()
+    }
+
+    fn restore_clipboard(&self, contents: &super::ClipboardContents) -> Result<(), String> {
+        restore_clipboard_text(self, contents)
+    }
+}
+
+/// Read the current plain-text clipboard content.
+fn read_clipboard_text() -> Option<ClipboardContents> {
+    let output = if is_wayland() {
+        Command::new("wl-paste")
+            .args(["--no-newline"])
+            .output()
+            .ok()?
+    } else {
+        Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .output()
+            .ok()?
+    };
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if text.is_empty() {
+        return None;
+    }
+
+    debug!("[Clipboard] Saved clipboard text ({} chars)", text.len());
+    Some(ClipboardContents { text })
+}
+
+/// Restore clipboard text.
+fn restore_clipboard_text(paster: &LinuxClipboardPaster, contents: &ClipboardContents) -> Result<(), String> {
+    paster.write_clipboard(&contents.text)?;
+    debug!("[Clipboard] Restored clipboard text ({} chars)", contents.text.len());
+    Ok(())
+}
+
+    // Write the saved text back
+    paster.write_clipboard(&contents.text)?;
+    debug!(
+        "[Clipboard] Restored clipboard text ({} chars)",
+        contents.text.len()
+    );
+    Ok(())
 }
 
 /// Detect whether we're running under Wayland.

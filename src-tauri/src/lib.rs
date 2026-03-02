@@ -9,7 +9,8 @@ mod tray;
 use flowstt_common::config::{Config, LogLevel, ThemeMode};
 use flowstt_common::ipc::{EventType, Request, Response};
 use flowstt_common::{
-    runtime_mode, AudioDevice, HotkeyCombination, RecordingMode, RuntimeMode, TranscriptionMode,
+    runtime_mode, AudioDevice, ConfigValues, HotkeyCombination, RecordingMode, RuntimeMode,
+    TranscriptionMode,
 };
 use std::env;
 use std::sync::Arc;
@@ -561,6 +562,30 @@ async fn toggle_auto_mode() -> Result<TranscriptionMode, String> {
     }
 }
 
+/// Get all persisted configuration values
+#[tauri::command]
+async fn get_config() -> Result<ConfigValues, String> {
+    let response = flowstt_engine::ipc::handlers::handle_request(Request::GetConfig).await;
+    match response {
+        Response::ConfigValues(values) => Ok(values),
+        Response::Error { message } => Err(message),
+        _ => Err("Unexpected response".into()),
+    }
+}
+
+/// Enable or disable clipboard save/restore around transcription paste
+#[tauri::command]
+async fn set_restore_clipboard(enabled: bool) -> Result<(), String> {
+    let response =
+        flowstt_engine::ipc::handlers::handle_request(Request::SetRestoreClipboard { enabled })
+            .await;
+    match response {
+        Response::Ok => Ok(()),
+        Response::Error { message } => Err(message),
+        _ => Err("Unexpected response".into()),
+    }
+}
+
 /// History entry struct for frontend compatibility
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LocalHistoryEntry {
@@ -1101,6 +1126,8 @@ pub fn run() {
             get_ptt_status,
             set_auto_toggle_hotkeys,
             toggle_auto_mode,
+            get_config,
+            set_restore_clipboard,
             get_history,
             delete_history_entry,
             connect_events,
