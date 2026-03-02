@@ -902,6 +902,103 @@ async fn download_logs(app_handle: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ─── App updater commands ────────────────────────────────────────────────────
+
+/// Information about an available app update, returned to the frontend.
+#[derive(serde::Serialize, Clone)]
+struct UpdateInfo {
+    available: bool,
+    version: Option<String>,
+    date: Option<String>,
+    notes: Option<String>,
+}
+
+/// Check for an available app update.
+///
+/// Returns `UpdateInfo` with `available = true` and metadata if a newer version
+/// exists on the configured endpoint, or `available = false` otherwise.
+#[tauri::command]
+#[cfg(desktop)]
+async fn check_for_updates(app: AppHandle) -> Result<UpdateInfo, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    match app.updater().map_err(|e| e.to_string())?.check().await {
+        Ok(Some(update)) => Ok(UpdateInfo {
+            available: true,
+            version: Some(update.version.clone()),
+            date: update.date.map(|d| d.to_string()),
+            notes: update.body.clone(),
+        }),
+        Ok(None) => Ok(UpdateInfo {
+            available: false,
+            version: None,
+            date: None,
+            notes: None,
+        }),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+#[cfg(not(desktop))]
+async fn check_for_updates(_app: AppHandle) -> Result<UpdateInfo, String> {
+    Ok(UpdateInfo {
+        available: false,
+        version: None,
+        date: None,
+        notes: None,
+    })
+}
+
+/// Download and install an available app update, then relaunch.
+///
+/// Emits `update-download-progress` events with payload
+/// `{ chunkLength: number, contentLength: number | null }` during download
+/// and relaunches the app after successful installation.
+#[tauri::command]
+#[cfg(desktop)]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No update available".to_string())?;
+
+    let app_handle = app.clone();
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                let _ = app_handle.emit(
+                    "update-download-progress",
+                    serde_json::json!({
+                        "chunkLength": chunk_length,
+                        "contentLength": content_length
+                    }),
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // restart() diverges (returns !) so Ok(()) is never reached;
+    // suppress with allow(unreachable_code).
+    #[allow(unreachable_code)]
+    {
+        app.restart();
+        Ok(())
+    }
+}
+
+#[tauri::command]
+#[cfg(not(desktop))]
+async fn install_update(_app: AppHandle) -> Result<(), String> {
+    Err("Updates not supported on this platform".to_string())
+}
+
 /// Connect events -- no-op now since events are forwarded directly from the engine
 /// via the registered EventCallback. Kept for frontend compatibility.
 #[tauri::command]
@@ -984,11 +1081,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState {
             ipc_server_handle: Mutex::new(None),
         })
         .manage(log_state)
         .setup(move |app| {
+            // Register desktop-only plugins
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             // Spawn the log-line forwarder task: drains the mpsc channel and
             // emits each line as a "log-line" Tauri event to all windows.
             {
@@ -1091,6 +1194,40 @@ pub fn run() {
                 }
             }
 
+            // Spawn a deferred background update check (release builds only).
+            // Fires 5 seconds after startup to avoid competing with audio/library init.
+            #[cfg(all(desktop, not(debug_assertions)))]
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    use tauri_plugin_updater::UpdaterExt;
+                    match app_handle.updater() {
+                        Ok(updater) => match updater.check().await {
+                            Ok(Some(update)) => {
+                                info!("[Updater] Update available: v{}", update.version);
+                                let payload = UpdateInfo {
+                                    available: true,
+                                    version: Some(update.version.clone()),
+                                    date: update.date.map(|d| d.to_string()),
+                                    notes: update.body.clone(),
+                                };
+                                let _ = app_handle.emit("update-available", payload);
+                            }
+                            Ok(None) => {
+                                debug!("[Updater] App is up to date");
+                            }
+                            Err(e) => {
+                                warn!("[Updater] Update check failed: {}", e);
+                            }
+                        },
+                        Err(e) => {
+                            warn!("[Updater] Failed to get updater: {}", e);
+                        }
+                    }
+                });
+            }
+
             debug!(
                 "[Startup] setup() hook done (+{}ms from run())",
                 app_t0.elapsed().as_millis()
@@ -1141,6 +1278,8 @@ pub fn run() {
             stop_test_audio_device,
             check_accessibility_permission,
             open_accessibility_settings,
+            check_for_updates,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,7 +5,7 @@ use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Manager, WebviewUrl,
+    Emitter, Manager, WebviewUrl,
 };
 use tracing::{error, warn};
 
@@ -41,6 +41,13 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let logs_item = MenuItem::with_id(app, menu_ids::LOGS, menu_labels::LOGS, true, None::<&str>)?;
     let about_item =
         MenuItem::with_id(app, menu_ids::ABOUT, menu_labels::ABOUT, true, None::<&str>)?;
+    let check_for_updates_item = MenuItem::with_id(
+        app,
+        menu_ids::CHECK_FOR_UPDATES,
+        menu_labels::CHECK_FOR_UPDATES,
+        true,
+        None::<&str>,
+    )?;
     let exit_item = MenuItem::with_id(app, menu_ids::EXIT, menu_labels::EXIT, true, None::<&str>)?;
 
     let menu = Menu::with_items(
@@ -51,6 +58,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &settings_item,
             &logs_item,
             &about_item,
+            &check_for_updates_item,
             &PredefinedMenuItem::separator(app)?,
             &exit_item,
         ],
@@ -96,6 +104,10 @@ fn handle_menu_event(
         }
         id if id == menu_ids::ABOUT => {
             show_about_window(app);
+        }
+        id if id == menu_ids::CHECK_FOR_UPDATES => {
+            show_about_window(app);
+            let _ = app.emit("trigger-update-check", ());
         }
         id if id == menu_ids::EXIT => {
             shutdown_engine();
@@ -167,7 +179,7 @@ fn show_about_window(app: &tauri::AppHandle) {
 
     let _ = tauri::WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
         .title("About FlowSTT")
-        .inner_size(400.0, 310.0)
+        .inner_size(400.0, 380.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)

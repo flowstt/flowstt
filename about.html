@@ -22,6 +22,25 @@
                 <a href="https://flowstt.io" id="link-website" class="about-link">Website</a>
                 <a href="https://github.com/flowstt/flowstt" id="link-github" class="about-link">GitHub</a>
             </div>
+
+            <div class="about-update-section">
+                <button class="about-update-btn" id="check-updates-btn">Check for Updates</button>
+                <div class="about-update-status" id="update-status" style="display:none">
+                    <span class="about-update-checking" id="update-checking" style="display:none">Checking...</span>
+                    <span class="about-update-current" id="update-current" style="display:none">You're up to date.</span>
+                    <span class="about-update-error" id="update-error" style="display:none"></span>
+                    <div class="about-update-available" id="update-available" style="display:none">
+                        <p class="about-update-version" id="update-version"></p>
+                        <p class="about-update-notes" id="update-notes"></p>
+                        <div class="about-update-progress-wrap" id="update-progress-wrap" style="display:none">
+                            <progress class="about-update-progress" id="update-progress" value="0" max="100"></progress>
+                            <span class="about-update-progress-label" id="update-progress-label">0%</span>
+                        </div>
+                        <button class="about-update-install-btn" id="install-update-btn">Install &amp; Relaunch</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="about-legal">
                 <p class="about-copyright">Copyright 2024-2026 KMX Consulting LLC</p>
                 <p class="about-license">

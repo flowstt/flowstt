@@ -276,6 +276,9 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           # APPLE_API_KEY and APPLE_API_KEY_PATH set via $GITHUB_ENV above
+          # Tauri Minisign keypair for updater artifact signing (orthogonal to Apple signing)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "FlowSTT ${{ github.ref_name }}"
@@ -364,6 +367,9 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          # Tauri Minisign keypair for updater artifact signing (orthogonal to Azure signing)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "FlowSTT ${{ github.ref_name }}"
@@ -387,32 +393,88 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+          BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
 
-          # Get the release assets
-          ASSETS=$(gh release view "${{ github.ref_name }}" --repo ${{ github.repository }} --json assets -q '.assets')
+          # Fetch the GitHub Release body for release notes
+          NOTES=$(gh release view "${TAG}" --repo "${REPO}" --json body -q '.body // ""')
 
-          # Build the update JSON
-          # For now, we'll create a basic structure - the signature will need to be added when we have signing
-          cat > latest.json << EOF
-          {
-            "version": "${VERSION}",
-            "notes": "",
-            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "platforms": {
-              "darwin-aarch64": {
-                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/FlowSTT_${VERSION}_aarch64.dmg"
-              },
-              "darwin-x86_64": {
-                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/FlowSTT_${VERSION}_x64.dmg"
-              },
-              "windows-x86_64": {
-                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/FlowSTT_${VERSION}_x64-setup.exe"
-              }
-            }
+          # Helper: fetch the content of a named .sig asset from the release
+          get_sig() {
+            local asset_name="$1"
+            gh release view "${TAG}" --repo "${REPO}" --json assets \
+              -q ".assets[] | select(.name == \"${asset_name}\") | .url" \
+            | xargs -I{} gh api {} --jq '.browser_download_url' 2>/dev/null \
+            | xargs curl -fsSL 2>/dev/null || true
           }
-          EOF
 
+          # tauri-action produces these update archive names:
+          #   macOS aarch64 : FlowSTT_<version>_aarch64.app.tar.gz  + .sig
+          #   macOS x86_64  : FlowSTT_<version>_x64.app.tar.gz      + .sig
+          #   Windows x86_64: FlowSTT_<version>_x64-setup.nsis.zip  + .sig
+          SIG_AARCH64=$(gh release view "${TAG}" --repo "${REPO}" --json assets \
+            -q '.assets[] | select(.name | endswith("aarch64.app.tar.gz.sig")) | .name' \
+            | head -1 | xargs -I{} gh release download "${TAG}" --repo "${REPO}" --pattern "{}" --dir /tmp/sigs 2>/dev/null && cat /tmp/sigs/*.app.tar.gz.sig 2>/dev/null | grep "aarch64" || true)
+
+          # Simpler approach: download all .sig files then read them
+          mkdir -p /tmp/sigs
+          gh release download "${TAG}" --repo "${REPO}" --pattern "*.sig" --dir /tmp/sigs 2>/dev/null || true
+
+          SIG_AARCH64=$(cat "/tmp/sigs/FlowSTT_${VERSION}_aarch64.app.tar.gz.sig" 2>/dev/null || echo "")
+          SIG_X64=$(cat "/tmp/sigs/FlowSTT_${VERSION}_x64.app.tar.gz.sig" 2>/dev/null || echo "")
+          SIG_WIN=$(cat "/tmp/sigs/FlowSTT_${VERSION}_x64-setup.nsis.zip.sig" 2>/dev/null || echo "")
+
+          # Validate that signatures are present
+          if [ -z "${SIG_AARCH64}" ] || [ -z "${SIG_X64}" ] || [ -z "${SIG_WIN}" ]; then
+            echo "ERROR: One or more .sig files are missing or empty."
+            echo "  darwin-aarch64 sig: '${SIG_AARCH64:0:20}...'"
+            echo "  darwin-x86_64  sig: '${SIG_X64:0:20}...'"
+            echo "  windows-x86_64 sig: '${SIG_WIN:0:20}...'"
+            echo "Ensure TAURI_SIGNING_PRIVATE_KEY is set in repository secrets."
+            exit 1
+          fi
+
+          # Write latest.json using jq for correct JSON escaping
+          jq -n \
+            --arg version "${VERSION}" \
+            --arg notes "${NOTES}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg url_aarch64 "${BASE_URL}/FlowSTT_${VERSION}_aarch64.app.tar.gz" \
+            --arg sig_aarch64 "${SIG_AARCH64}" \
+            --arg url_x64 "${BASE_URL}/FlowSTT_${VERSION}_x64.app.tar.gz" \
+            --arg sig_x64 "${SIG_X64}" \
+            --arg url_win "${BASE_URL}/FlowSTT_${VERSION}_x64-setup.nsis.zip" \
+            --arg sig_win "${SIG_WIN}" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "darwin-aarch64": { url: $url_aarch64, signature: $sig_aarch64 },
+                "darwin-x86_64":  { url: $url_x64,    signature: $sig_x64 },
+                "windows-x86_64": { url: $url_win,    signature: $sig_win }
+              }
+            }' > latest.json
+
+          echo "Generated latest.json:"
           cat latest.json
+
+      - name: Validate latest.json
+        run: |
+          # Verify the file is valid JSON
+          jq empty latest.json || { echo "ERROR: latest.json is not valid JSON"; exit 1; }
+
+          # Verify signature fields are non-empty
+          for platform in "darwin-aarch64" "darwin-x86_64" "windows-x86_64"; do
+            sig=$(jq -r ".platforms[\"${platform}\"].signature // empty" latest.json)
+            if [ -z "${sig}" ]; then
+              echo "ERROR: Signature for ${platform} is empty in latest.json"
+              exit 1
+            fi
+            echo "  ${platform}: signature OK (${#sig} chars)"
+          done
+          echo "latest.json validation passed."
 
       - name: Upload latest.json to release
         env:

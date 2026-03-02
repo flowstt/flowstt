@@ -149,3 +149,116 @@ body {
     color: var(--link-hover);
     text-decoration: underline;
 }
+
+/* ── Update section ─────────────────────────────────────────────────────────── */
+
+.about-update-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    width: 100%;
+}
+
+.about-update-btn,
+.about-update-install-btn {
+    background: transparent;
+    border: 1px solid var(--link-color);
+    color: var(--link-color);
+    border-radius: 5px;
+    padding: 4px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.about-update-btn:hover,
+.about-update-install-btn:hover {
+    background: var(--link-color);
+    color: var(--bg-gradient-start);
+}
+
+.about-update-btn:disabled,
+.about-update-install-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.about-update-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    font-size: 12px;
+}
+
+.about-update-checking,
+.about-update-current {
+    color: var(--about-description-text);
+}
+
+.about-update-error {
+    color: var(--text-error, #e05c5c);
+}
+
+.about-update-available {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+}
+
+.about-update-version {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.about-update-notes {
+    font-size: 11px;
+    color: var(--about-description-text);
+    text-align: center;
+    max-width: 260px;
+    margin: 0;
+    white-space: pre-wrap;
+    max-height: 60px;
+    overflow-y: auto;
+}
+
+.about-update-progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 220px;
+}
+
+.about-update-progress {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--bg-gradient-end);
+    border: none;
+}
+
+.about-update-progress::-webkit-progress-bar {
+    background: var(--bg-gradient-end);
+    border-radius: 2px;
+}
+
+.about-update-progress::-webkit-progress-value {
+    background: var(--link-color);
+    border-radius: 2px;
+}
+
+.about-update-progress-label {
+    font-size: 11px;
+    color: var(--about-description-text);
+    min-width: 30px;
+    text-align: right;
+}

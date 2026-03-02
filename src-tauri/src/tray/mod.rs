@@ -22,6 +22,7 @@ pub mod menu_ids {
     pub const SETTINGS: &str = "settings";
     pub const LOGS: &str = "logs";
     pub const ABOUT: &str = "about";
+    pub const CHECK_FOR_UPDATES: &str = "check_for_updates";
     pub const RUN_TEST: &str = "run_test";
     pub const EXIT: &str = "exit";
 }
@@ -34,6 +35,7 @@ pub mod menu_labels {
     pub const SETTINGS: &str = "Settings";
     pub const LOGS: &str = "Logs";
     pub const ABOUT: &str = "About";
+    pub const CHECK_FOR_UPDATES: &str = "Check for Updates";
     pub const RUN_TEST: &str = "Run Test (WAV Directory)...";
     pub const EXIT: &str = "Exit";
 }
