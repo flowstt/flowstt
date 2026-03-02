@@ -581,7 +581,7 @@ async function openConfigWindow() {
     url: "config.html",
     title: "FlowSTT Settings",
     width: 480,
-    height: 460,
+    height: 529,
     resizable: false,
     maximizable: false,
     minimizable: false,

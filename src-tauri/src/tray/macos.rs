@@ -180,20 +180,19 @@ fn show_about_window(app: &tauri::AppHandle) {
 }
 
 fn show_config_window(app: &tauri::AppHandle) {
+    // Destroy any existing instance so it is always recreated at the correct size.
     if let Some(window) = app.get_webview_window("config") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
+        let _ = window.destroy();
     }
 
     let _ = tauri::WebviewWindowBuilder::new(app, "config", WebviewUrl::App("config.html".into()))
         .title("FlowSTT Settings")
-        .inner_size(480.0, 460.0)
+        .inner_size(480.0, 529.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
-        .decorations(true)
-        .transparent(false)
+        .decorations(false)
+        .transparent(true)
         .shadow(true)
         .skip_taskbar(true)
         .center()
