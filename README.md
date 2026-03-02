@@ -34,12 +34,12 @@ FlowSTT is a free, privacy-first speech-to-text application that runs entirely o
 Download the latest release from the [Releases page](https://github.com/flowstt/flowstt/releases).
 
 <!-- release-links:start -->
-**Current release:** v0.1.20
+**Current release:** v0.1.21
 
 **Download packages**
-- Windows: [FlowSTT_0.1.20_x64_en-US.msi](https://github.com/flowstt/flowstt/releases/download/v0.1.20/FlowSTT_0.1.20_x64_en-US.msi)
-- macOS (Apple Silicon M-Series): [FlowSTT_0.1.20_aarch64.dmg](https://github.com/flowstt/flowstt/releases/download/v0.1.20/FlowSTT_0.1.20_aarch64.dmg)
-- macOS (Legacy Intel x64): [FlowSTT_0.1.20_x64.dmg](https://github.com/flowstt/flowstt/releases/download/v0.1.20/FlowSTT_0.1.20_x64.dmg)
+- Windows: [FlowSTT_0.1.21_x64_en-US.msi](https://github.com/flowstt/flowstt/releases/download/v0.1.21/FlowSTT_0.1.21_x64_en-US.msi)
+- macOS (Apple Silicon M-Series): [FlowSTT_0.1.21_aarch64.dmg](https://github.com/flowstt/flowstt/releases/download/v0.1.21/FlowSTT_0.1.21_aarch64.dmg)
+- macOS (Legacy Intel x64): [FlowSTT_0.1.21_x64.dmg](https://github.com/flowstt/flowstt/releases/download/v0.1.21/FlowSTT_0.1.21_x64.dmg)
 <!-- release-links:end -->
 
 ***Linux Support Coming Soon!***
