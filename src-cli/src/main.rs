@@ -694,6 +694,7 @@ async fn get_config_values(client: &mut Client) -> Result<ConfigValues, CliError
         auto_toggle_hotkeys: config.auto_toggle_hotkeys,
         auto_paste_enabled: config.auto_paste_enabled,
         auto_paste_delay_ms: config.auto_paste_delay_ms,
+        restore_clipboard_enabled: config.restore_clipboard_enabled,
     })
 }
 
