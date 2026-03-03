@@ -209,7 +209,9 @@ const main = async () => {
     console.log("Dry run complete. Local files updated; no git commands executed.");
     return;
   }
-  run("git", ["add", "package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-engine/Cargo.toml", "src-common/Cargo.toml", "src-cli/Cargo.toml", "README.md"]);
+  console.log("Syncing Cargo.lock...");
+  run("cargo", ["update", "--workspace"], { stdio: "inherit" });
+  run("git", ["add", "package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-engine/Cargo.toml", "src-common/Cargo.toml", "src-cli/Cargo.toml", "README.md", "Cargo.lock"]);
   const staged = run("git", ["diff", "--cached", "--name-only"]);
   if (!staged) {
     console.error("No changes staged for commit. Aborting release.");
