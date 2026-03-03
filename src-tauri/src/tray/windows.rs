@@ -269,7 +269,7 @@ fn show_about_window(app: &tauri::AppHandle) {
     // Create About window
     let _ = tauri::WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
         .title("About FlowSTT")
-        .inner_size(400.0, 380.0)
+        .inner_size(400.0, 440.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
