@@ -5,8 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { initTheme, getResolvedTheme, onThemeChange } from "./theme";
 
-import logoLight from "./assets/flowstt-portrait-light.svg";
-import logoDark from "./assets/flowstt-portrait.svg";
+import logoLight from "./assets/flowstt-landscape-light.svg";
+import logoDark from "./assets/flowstt-landscape.svg";
 
 const WEBSITE_URL = "https://flowstt.io";
 const GITHUB_URL = "https://github.com/flowstt/flowstt";

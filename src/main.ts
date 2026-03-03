@@ -548,7 +548,7 @@ async function openAboutWindow() {
     url: "about.html",
     title: "About FlowSTT",
     width: 400,
-    height: 440,
+    height: 460,
     resizable: false,
     maximizable: false,
     minimizable: false,

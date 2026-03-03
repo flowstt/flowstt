@@ -81,46 +81,64 @@ body {
     color: var(--text-primary);
 }
 
+/* ── Logo ─────────────────────────────────────────────────────────────────── */
+
 .about-logo {
-    width: auto;
-    height: 80px;
-    margin-bottom: 16px;
+    width: 200px;
+    height: auto;
+    margin-bottom: 20px;
     pointer-events: none;
+}
+
+/* ── Identity row: version + beta badge ────────────────────────────────────── */
+
+.about-identity-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
 }
 
 .about-version {
     font-size: 13px;
     color: var(--about-version-text);
-    margin-bottom: 8px;
 }
 
 .about-beta-badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
     background: var(--beta-badge-bg);
     color: var(--beta-badge-text);
-    font-size: 0.65rem;
+    font-size: 0.6rem;
     font-weight: 700;
     letter-spacing: 0.1em;
-    padding: 0.2em 0.6em;
+    padding: 0.2em 0.55em;
     border-radius: 3px;
-    margin-bottom: 16px;
 }
+
+/* ── Tagline ──────────────────────────────────────────────────────────────── */
 
 .about-description {
     font-size: 13px;
     color: var(--about-description-text);
     text-align: center;
-    margin-bottom: 20px;
+    margin-bottom: 14px;
     line-height: 1.5;
 }
 
+/* ── Links ────────────────────────────────────────────────────────────────── */
+
 .about-links {
     display: flex;
-    gap: 24px;
-    margin-bottom: 20px;
+    gap: 20px;
+    margin-bottom: 24px;
 }
 
 .about-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     color: var(--link-color);
     text-decoration: none;
     font-size: 13px;
@@ -132,9 +150,17 @@ body {
     text-decoration: underline;
 }
 
+.about-link-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+/* ── Legal ────────────────────────────────────────────────────────────────── */
+
 .about-legal {
     margin-top: auto;
-    padding-bottom: 20px;
+    padding-bottom: 18px;
     text-align: center;
     color: var(--about-legal-text);
     font-size: 11px;
@@ -158,8 +184,9 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
     width: 100%;
+    margin-bottom: 4px;
 }
 
 .about-update-btn,
@@ -190,7 +217,7 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     width: 100%;
     font-size: 12px;
 }
@@ -208,7 +235,7 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     width: 100%;
 }
 
