@@ -33,8 +33,10 @@ if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
 
 const version = tag.slice(1);
 
-const run = (cmd, cmdArgs, options = {}) =>
-  execFileSync(cmd, cmdArgs, { encoding: "utf8", ...options }).trim();
+const run = (cmd, cmdArgs, options = {}) => {
+  const result = execFileSync(cmd, cmdArgs, { encoding: "utf8", ...options });
+  return result == null ? "" : result.trim();
+};
 
 const scriptDir = path.dirname(new URL(import.meta.url).pathname);
 const repoRoot = dryRun ? run("git", ["rev-parse", "--show-toplevel"]) : run("git", ["rev-parse", "--show-toplevel"]);
