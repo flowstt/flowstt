@@ -17,6 +17,10 @@ const RING_BUFFER_CAPACITY: usize = 48000 * 30 * 2;
 /// Overflow threshold: 90% of buffer capacity
 const OVERFLOW_THRESHOLD_PERCENT: usize = 90;
 
+/// Maximum PTT recording duration: 30 minutes at 48kHz stereo
+/// 48000 * 1800 * 2 = 172,800,000 samples
+const MAX_PTT_DURATION_SAMPLES: usize = 48000 * 1800 * 2;
+
 /// Maximum segment duration before seeking word break
 const MAX_SEGMENT_DURATION_MS: u64 = 4000;
 
@@ -212,6 +216,8 @@ pub struct TranscribeState {
     callback: Option<Arc<dyn TranscribeStateCallback>>,
     /// PTT mode - disables automatic segmentation
     ptt_mode: bool,
+    /// Growable buffer for PTT recordings (avoids ring buffer's 30s wraparound limit)
+    ptt_buffer: Vec<f32>,
 }
 
 impl TranscribeState {
@@ -231,6 +237,7 @@ impl TranscribeState {
             lookback_sample_count: 0,
             callback: None,
             ptt_mode: false,
+            ptt_buffer: Vec::new(),
         }
     }
 
@@ -265,6 +272,7 @@ impl TranscribeState {
         self.seeking_word_break = false;
         self.word_break_seek_start_samples = 0;
         self.lookback_sample_count = 0;
+        self.ptt_buffer.clear();
     }
 
     /// Activate transcribe mode
@@ -283,6 +291,8 @@ impl TranscribeState {
         self.is_active = false;
         self.in_speech = false;
         self.seeking_word_break = false;
+        // Free PTT buffer memory
+        self.ptt_buffer = Vec::new();
     }
 
     /// Process incoming audio samples - writes to ring buffer and checks for overflow/duration
@@ -293,11 +303,26 @@ impl TranscribeState {
             return None;
         }
 
-        // In PTT mode, skip all automatic segmentation - just write samples
+        // In PTT mode, write to growable buffer (no ring buffer wraparound limit)
         if self.ptt_mode {
-            self.ring_buffer.write(samples);
             if self.in_speech {
-                self.segment_sample_count += samples.len() as u64;
+                let remaining_capacity =
+                    MAX_PTT_DURATION_SAMPLES.saturating_sub(self.ptt_buffer.len());
+                if remaining_capacity == 0 {
+                    // Already at max duration - silently stop accumulating
+                    return None;
+                }
+                let samples_to_write = if samples.len() <= remaining_capacity {
+                    samples
+                } else {
+                    tracing::warn!(
+                        "[TranscribeState] PTT recording reached 30-minute maximum ({} samples)",
+                        MAX_PTT_DURATION_SAMPLES
+                    );
+                    &samples[..remaining_capacity]
+                };
+                self.ptt_buffer.extend_from_slice(samples_to_write);
+                self.segment_sample_count += samples_to_write.len() as u64;
             }
             return None;
         }
@@ -405,8 +430,12 @@ impl TranscribeState {
             return None;
         }
 
-        // Extract the segment
-        let segment = self.ring_buffer.extract_segment(self.segment_start_idx);
+        // In PTT mode, take the accumulated growable buffer instead of ring buffer
+        let segment = if self.ptt_mode {
+            std::mem::take(&mut self.ptt_buffer)
+        } else {
+            self.ring_buffer.extract_segment(self.segment_start_idx)
+        };
 
         self.in_speech = false;
         self.segment_sample_count = 0;
@@ -418,9 +447,11 @@ impl TranscribeState {
             return None;
         }
 
+        let duration_ms = self.samples_to_ms(segment.len() as u64);
         tracing::debug!(
-            "[TranscribeState] Speech ended, extracted {} samples",
-            segment.len()
+            "[TranscribeState] Speech ended, extracted {} samples ({}ms)",
+            segment.len(),
+            duration_ms
         );
 
         // Queue the segment for transcription (will validate before actually queueing)
