@@ -401,26 +401,24 @@ jobs:
           NOTES=$(gh release view "${TAG}" --repo "${REPO}" --json body -q '.body // ""')
 
           # Download all .sig files from the release assets into /tmp/sigs.
-          # tauri-action (with createUpdaterArtifacts: true) produces:
-          #   macOS aarch64: FlowSTT_<ver>_aarch64.app.tar.gz + .sig
-          #   macOS x86_64 : FlowSTT_<ver>_x64.app.tar.gz    + .sig
-          #   Windows MSI  : FlowSTT_<ver>_x64_en-US.msi     + .sig
-          #   (locale suffix may vary; discover dynamically below)
+          # tauri-action (createUpdaterArtifacts: true, --bundles dmg,app) produces:
+          #   macOS aarch64: FlowSTT_aarch64.app.tar.gz      + .sig  (no version in name)
+          #   macOS x86_64 : FlowSTT_x64.app.tar.gz          + .sig  (no version in name)
+          #   Windows MSI  : FlowSTT_<ver>_x64_<locale>.msi  + .sig  (version + locale in name)
           mkdir -p /tmp/sigs
           gh release download "${TAG}" --repo "${REPO}" --pattern "*.sig" --dir /tmp/sigs
 
           echo "Downloaded .sig files:"
           ls -1 /tmp/sigs/
 
-          # macOS signatures (names are stable - no locale suffix)
-          SIG_AARCH64=$(cat "/tmp/sigs/FlowSTT_${VERSION}_aarch64.app.tar.gz.sig" 2>/dev/null || echo "")
-          SIG_X64=$(cat    "/tmp/sigs/FlowSTT_${VERSION}_x64.app.tar.gz.sig"     2>/dev/null || echo "")
+          # macOS: tauri-action omits the version from .app.tar.gz names
+          SIG_AARCH64=$(cat "/tmp/sigs/FlowSTT_aarch64.app.tar.gz.sig" 2>/dev/null || echo "")
+          SIG_X64=$(cat     "/tmp/sigs/FlowSTT_x64.app.tar.gz.sig"     2>/dev/null || echo "")
 
-          # Windows MSI signature - discover the locale-suffixed name dynamically
+          # Windows MSI: discover locale-suffixed name dynamically, derive MSI filename
           WIN_SIG_FILE=$(ls /tmp/sigs/FlowSTT_${VERSION}_x64_*.msi.sig 2>/dev/null | head -1)
           if [ -n "${WIN_SIG_FILE}" ]; then
             SIG_WIN=$(cat "${WIN_SIG_FILE}")
-            # Derive the .msi filename from the .sig filename (strip trailing .sig)
             WIN_MSI_NAME=$(basename "${WIN_SIG_FILE}" .sig)
           else
             SIG_WIN=""
@@ -430,26 +428,22 @@ jobs:
           # Validate that all signatures are present
           if [ -z "${SIG_AARCH64}" ] || [ -z "${SIG_X64}" ] || [ -z "${SIG_WIN}" ]; then
             echo "ERROR: One or more .sig files are missing or empty."
-            echo "  darwin-aarch64 (.app.tar.gz.sig): $([ -n "${SIG_AARCH64}" ] && echo "OK" || echo "MISSING")"
-            echo "  darwin-x86_64  (.app.tar.gz.sig): $([ -n "${SIG_X64}" ]    && echo "OK" || echo "MISSING")"
-            echo "  windows-x86_64 (.msi.sig):        $([ -n "${SIG_WIN}" ]    && echo "OK" || echo "MISSING")"
-            echo ""
-            echo "Ensure TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
-            echo "are set as repository secrets, and that --bundles dmg,app is set for"
-            echo "macOS tauri-action args in the build matrix."
+            echo "  darwin-aarch64 (FlowSTT_aarch64.app.tar.gz.sig):   $([ -n "${SIG_AARCH64}" ] && echo "OK" || echo "MISSING")"
+            echo "  darwin-x86_64  (FlowSTT_x64.app.tar.gz.sig):       $([ -n "${SIG_X64}" ]    && echo "OK" || echo "MISSING")"
+            echo "  windows-x86_64 (FlowSTT_${VERSION}_x64_*.msi.sig): $([ -n "${SIG_WIN}" ]    && echo "OK" || echo "MISSING")"
             exit 1
           fi
 
           # Write latest.json using jq for correct JSON escaping.
-          # macOS: url points to .app.tar.gz updater archive
-          # Windows: url points to the .msi installer (tauri v2 uses the MSI directly)
+          # macOS: url points to .app.tar.gz updater archive (version-less name)
+          # Windows: url points to the .msi installer (tauri v2 uses MSI directly)
           jq -n \
             --arg version    "${VERSION}" \
             --arg notes      "${NOTES}" \
             --arg pub_date   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg url_aarch64 "${BASE_URL}/FlowSTT_${VERSION}_aarch64.app.tar.gz" \
+            --arg url_aarch64 "${BASE_URL}/FlowSTT_aarch64.app.tar.gz" \
             --arg sig_aarch64 "${SIG_AARCH64}" \
-            --arg url_x64    "${BASE_URL}/FlowSTT_${VERSION}_x64.app.tar.gz" \
+            --arg url_x64    "${BASE_URL}/FlowSTT_x64.app.tar.gz" \
             --arg sig_x64    "${SIG_X64}" \
             --arg url_win    "${BASE_URL}/${WIN_MSI_NAME}" \
             --arg sig_win    "${SIG_WIN}" \
