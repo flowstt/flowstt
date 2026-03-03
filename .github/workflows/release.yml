@@ -114,10 +114,10 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin --bundles dmg
+            args: --target aarch64-apple-darwin --bundles dmg,app
           - platform: macos-latest
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin --bundles dmg
+            args: --target x86_64-apple-darwin --bundles dmg,app
           # TODO: Re-enable Linux support in a future version
           # - platform: ubuntu-22.04
           #   args: ""
@@ -400,52 +400,59 @@ jobs:
           # Fetch the GitHub Release body for release notes
           NOTES=$(gh release view "${TAG}" --repo "${REPO}" --json body -q '.body // ""')
 
-          # Helper: fetch the content of a named .sig asset from the release
-          get_sig() {
-            local asset_name="$1"
-            gh release view "${TAG}" --repo "${REPO}" --json assets \
-              -q ".assets[] | select(.name == \"${asset_name}\") | .url" \
-            | xargs -I{} gh api {} --jq '.browser_download_url' 2>/dev/null \
-            | xargs curl -fsSL 2>/dev/null || true
-          }
-
-          # tauri-action produces these update archive names:
-          #   macOS aarch64 : FlowSTT_<version>_aarch64.app.tar.gz  + .sig
-          #   macOS x86_64  : FlowSTT_<version>_x64.app.tar.gz      + .sig
-          #   Windows x86_64: FlowSTT_<version>_x64-setup.nsis.zip  + .sig
-          SIG_AARCH64=$(gh release view "${TAG}" --repo "${REPO}" --json assets \
-            -q '.assets[] | select(.name | endswith("aarch64.app.tar.gz.sig")) | .name' \
-            | head -1 | xargs -I{} gh release download "${TAG}" --repo "${REPO}" --pattern "{}" --dir /tmp/sigs 2>/dev/null && cat /tmp/sigs/*.app.tar.gz.sig 2>/dev/null | grep "aarch64" || true)
-
-          # Simpler approach: download all .sig files then read them
+          # Download all .sig files from the release assets into /tmp/sigs.
+          # tauri-action (with createUpdaterArtifacts: true) produces:
+          #   macOS aarch64: FlowSTT_<ver>_aarch64.app.tar.gz + .sig
+          #   macOS x86_64 : FlowSTT_<ver>_x64.app.tar.gz    + .sig
+          #   Windows MSI  : FlowSTT_<ver>_x64_en-US.msi     + .sig
+          #   (locale suffix may vary; discover dynamically below)
           mkdir -p /tmp/sigs
-          gh release download "${TAG}" --repo "${REPO}" --pattern "*.sig" --dir /tmp/sigs 2>/dev/null || true
+          gh release download "${TAG}" --repo "${REPO}" --pattern "*.sig" --dir /tmp/sigs
 
+          echo "Downloaded .sig files:"
+          ls -1 /tmp/sigs/
+
+          # macOS signatures (names are stable - no locale suffix)
           SIG_AARCH64=$(cat "/tmp/sigs/FlowSTT_${VERSION}_aarch64.app.tar.gz.sig" 2>/dev/null || echo "")
-          SIG_X64=$(cat "/tmp/sigs/FlowSTT_${VERSION}_x64.app.tar.gz.sig" 2>/dev/null || echo "")
-          SIG_WIN=$(cat "/tmp/sigs/FlowSTT_${VERSION}_x64-setup.nsis.zip.sig" 2>/dev/null || echo "")
+          SIG_X64=$(cat    "/tmp/sigs/FlowSTT_${VERSION}_x64.app.tar.gz.sig"     2>/dev/null || echo "")
 
-          # Validate that signatures are present
+          # Windows MSI signature - discover the locale-suffixed name dynamically
+          WIN_SIG_FILE=$(ls /tmp/sigs/FlowSTT_${VERSION}_x64_*.msi.sig 2>/dev/null | head -1)
+          if [ -n "${WIN_SIG_FILE}" ]; then
+            SIG_WIN=$(cat "${WIN_SIG_FILE}")
+            # Derive the .msi filename from the .sig filename (strip trailing .sig)
+            WIN_MSI_NAME=$(basename "${WIN_SIG_FILE}" .sig)
+          else
+            SIG_WIN=""
+            WIN_MSI_NAME=""
+          fi
+
+          # Validate that all signatures are present
           if [ -z "${SIG_AARCH64}" ] || [ -z "${SIG_X64}" ] || [ -z "${SIG_WIN}" ]; then
             echo "ERROR: One or more .sig files are missing or empty."
-            echo "  darwin-aarch64 sig: '${SIG_AARCH64:0:20}...'"
-            echo "  darwin-x86_64  sig: '${SIG_X64:0:20}...'"
-            echo "  windows-x86_64 sig: '${SIG_WIN:0:20}...'"
-            echo "Ensure TAURI_SIGNING_PRIVATE_KEY is set in repository secrets."
+            echo "  darwin-aarch64 (.app.tar.gz.sig): $([ -n "${SIG_AARCH64}" ] && echo "OK" || echo "MISSING")"
+            echo "  darwin-x86_64  (.app.tar.gz.sig): $([ -n "${SIG_X64}" ]    && echo "OK" || echo "MISSING")"
+            echo "  windows-x86_64 (.msi.sig):        $([ -n "${SIG_WIN}" ]    && echo "OK" || echo "MISSING")"
+            echo ""
+            echo "Ensure TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            echo "are set as repository secrets, and that --bundles dmg,app is set for"
+            echo "macOS tauri-action args in the build matrix."
             exit 1
           fi
 
-          # Write latest.json using jq for correct JSON escaping
+          # Write latest.json using jq for correct JSON escaping.
+          # macOS: url points to .app.tar.gz updater archive
+          # Windows: url points to the .msi installer (tauri v2 uses the MSI directly)
           jq -n \
-            --arg version "${VERSION}" \
-            --arg notes "${NOTES}" \
-            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg version    "${VERSION}" \
+            --arg notes      "${NOTES}" \
+            --arg pub_date   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg url_aarch64 "${BASE_URL}/FlowSTT_${VERSION}_aarch64.app.tar.gz" \
             --arg sig_aarch64 "${SIG_AARCH64}" \
-            --arg url_x64 "${BASE_URL}/FlowSTT_${VERSION}_x64.app.tar.gz" \
-            --arg sig_x64 "${SIG_X64}" \
-            --arg url_win "${BASE_URL}/FlowSTT_${VERSION}_x64-setup.nsis.zip" \
-            --arg sig_win "${SIG_WIN}" \
+            --arg url_x64    "${BASE_URL}/FlowSTT_${VERSION}_x64.app.tar.gz" \
+            --arg sig_x64    "${SIG_X64}" \
+            --arg url_win    "${BASE_URL}/${WIN_MSI_NAME}" \
+            --arg sig_win    "${SIG_WIN}" \
             '{
               version: $version,
               notes: $notes,
