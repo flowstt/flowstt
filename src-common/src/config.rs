@@ -22,6 +22,32 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// VAD (voice activity detection) sensitivity preset.
+///
+/// Maps to voiced/whisper amplitude threshold pairs:
+/// - Low:    -38 dB voiced / -48 dB whisper (less sensitive, requires louder input)
+/// - Medium: -42 dB voiced / -52 dB whisper (default, matches historical behaviour)
+/// - High:   -48 dB voiced / -58 dB whisper (more sensitive, may pick up ambient noise)
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VadSensitivity {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl VadSensitivity {
+    /// Return the `(voiced_threshold_db, whisper_threshold_db)` pair for this preset.
+    pub fn thresholds(&self) -> (f32, f32) {
+        match self {
+            VadSensitivity::Low => (-38.0, -48.0),
+            VadSensitivity::Medium => (-42.0, -52.0),
+            VadSensitivity::High => (-48.0, -58.0),
+        }
+    }
+}
+
 /// Minimum log level for the tracing subscriber.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -83,6 +109,12 @@ pub struct Config {
     /// Whether to save and restore clipboard contents around each transcription paste
     #[serde(default = "default_restore_clipboard_enabled")]
     pub restore_clipboard_enabled: bool,
+    /// Microphone input gain multiplier applied before VAD and transcription (1.0–4.0, default 1.0)
+    #[serde(default = "default_mic_gain")]
+    pub mic_gain: f32,
+    /// VAD sensitivity preset controlling amplitude detection thresholds (default: Medium)
+    #[serde(default)]
+    pub vad_sensitivity: VadSensitivity,
 }
 
 fn default_auto_toggle_hotkeys() -> Vec<HotkeyCombination> {
@@ -99,6 +131,10 @@ fn default_auto_paste_delay_ms() -> u32 {
 
 fn default_restore_clipboard_enabled() -> bool {
     true
+}
+
+fn default_mic_gain() -> f32 {
+    1.0
 }
 
 /// Legacy configuration format for backward-compatible loading.
@@ -130,6 +166,10 @@ struct LegacyConfig {
     log_level: Option<LogLevel>,
     /// Whether clipboard restore is enabled (may be absent in old configs)
     restore_clipboard_enabled: Option<bool>,
+    /// Microphone input gain (may be absent in old configs)
+    mic_gain: Option<f32>,
+    /// VAD sensitivity preset (may be absent in old configs)
+    vad_sensitivity: Option<VadSensitivity>,
 }
 
 impl Config {
@@ -214,6 +254,8 @@ impl Config {
             preferred_source2_id: None,
             log_level: LogLevel::default(),
             restore_clipboard_enabled: true,
+            mic_gain: 1.0,
+            vad_sensitivity: VadSensitivity::default(),
         }
     }
 
@@ -263,6 +305,8 @@ impl Config {
             preferred_source2_id: legacy.preferred_source2_id,
             log_level: legacy.log_level.unwrap_or_default(),
             restore_clipboard_enabled: legacy.restore_clipboard_enabled.unwrap_or(true),
+            mic_gain: legacy.mic_gain.unwrap_or(1.0),
+            vad_sensitivity: legacy.vad_sensitivity.unwrap_or_default(),
         }
     }
 }

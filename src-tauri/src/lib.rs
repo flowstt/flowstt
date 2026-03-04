@@ -586,6 +586,31 @@ async fn set_restore_clipboard(enabled: bool) -> Result<(), String> {
     }
 }
 
+/// Set the microphone input gain multiplier (1.0–4.0)
+#[tauri::command]
+async fn set_mic_gain(gain: f32) -> Result<(), String> {
+    let response =
+        flowstt_engine::ipc::handlers::handle_request(Request::SetMicGain { gain }).await;
+    match response {
+        Response::Ok => Ok(()),
+        Response::Error { message } => Err(message),
+        _ => Err("Unexpected response".into()),
+    }
+}
+
+/// Set the VAD sensitivity preset ("low", "medium", or "high")
+#[tauri::command]
+async fn set_vad_sensitivity(sensitivity: String) -> Result<(), String> {
+    let response =
+        flowstt_engine::ipc::handlers::handle_request(Request::SetVadSensitivity { sensitivity })
+            .await;
+    match response {
+        Response::Ok => Ok(()),
+        Response::Error { message } => Err(message),
+        _ => Err("Unexpected response".into()),
+    }
+}
+
 /// History entry struct for frontend compatibility
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LocalHistoryEntry {
@@ -1265,6 +1290,8 @@ pub fn run() {
             toggle_auto_mode,
             get_config,
             set_restore_clipboard,
+            set_mic_gain,
+            set_vad_sensitivity,
             get_history,
             delete_history_entry,
             connect_events,

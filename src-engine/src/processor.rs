@@ -203,6 +203,24 @@ impl SpeechDetector {
         Self::with_defaults(sample_rate)
     }
 
+    /// Create a speech detector with explicit voiced and whisper amplitude thresholds.
+    ///
+    /// All other parameters use the same defaults as [`Self::with_defaults`].
+    /// The lookback threshold is set to `whisper_threshold_db - 3.0` so it remains
+    /// more sensitive than the configured whisper threshold.
+    pub fn with_thresholds(
+        sample_rate: u32,
+        voiced_threshold_db: f32,
+        whisper_threshold_db: f32,
+    ) -> Self {
+        let mut detector = Self::with_defaults(sample_rate);
+        detector.voiced_config.threshold_db = voiced_threshold_db;
+        detector.whisper_config.threshold_db = whisper_threshold_db;
+        // Lookback threshold stays below the whisper threshold to catch the true speech start
+        detector.lookback_threshold_db = whisper_threshold_db - 3.0;
+        detector
+    }
+
     /// Create a speech detector with default dual-mode configuration.
     ///
     /// Default parameters:

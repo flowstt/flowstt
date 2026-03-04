@@ -53,11 +53,25 @@ pub fn start_audio_loop(
         .map(|b| b.sample_rate())
         .unwrap_or(48000);
 
+    // Load config once at loop start for gain and VAD sensitivity
+    let config = crate::config::Config::load();
+    let mic_gain = config.mic_gain.clamp(1.0, 4.0);
+    let (voiced_db, whisper_db) = config.vad_sensitivity.thresholds();
+
+    tracing::info!(
+        "[AudioLoop] mic_gain={:.2}, vad_sensitivity={:?} (voiced={:.0}dB, whisper={:.0}dB)",
+        mic_gain,
+        config.vad_sensitivity,
+        voiced_db,
+        whisper_db
+    );
+
     thread::spawn(move || {
         tracing::info!("[AudioLoop] Starting audio processing loop");
 
-        // Create speech detector
-        let mut speech_detector = SpeechDetector::new(sample_rate);
+        // Create speech detector with configured sensitivity thresholds
+        let mut speech_detector =
+            SpeechDetector::with_thresholds(sample_rate, voiced_db, whisper_db);
         speech_detector.set_callback(Arc::new(SpeechEventBroadcaster));
 
         // Create visualization processor
@@ -80,7 +94,14 @@ pub fn start_audio_loop(
             // Try to receive audio from backend
             let audio_data = platform::get_backend().and_then(|b| b.try_recv());
 
-            if let Some(data) = audio_data {
+            if let Some(mut data) = audio_data {
+                // Apply input gain and clamp to valid sample range
+                if mic_gain != 1.0 {
+                    for s in data.samples.iter_mut() {
+                        *s = (*s * mic_gain).clamp(-1.0, 1.0);
+                    }
+                }
+
                 // Convert to mono for processing
                 let mono_samples = convert_to_mono(&data.samples, data.channels as usize);
 

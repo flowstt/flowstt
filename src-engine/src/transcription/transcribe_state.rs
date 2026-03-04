@@ -31,10 +31,6 @@ const WORD_BREAK_GRACE_MS: u64 = 750;
 /// Segments shorter than this are likely to produce [BLANK_AUDIO] from Whisper
 const MIN_SEGMENT_DURATION_MS: u64 = 500;
 
-/// Minimum RMS amplitude threshold for non-silent audio (linear scale)
-/// Approximately -40dB
-const MIN_AUDIO_RMS_THRESHOLD: f32 = 0.01;
-
 /// Safety margin before word break point (ms) - ensures we don't cut into the end of speech
 /// The extraction point will be (gap_start - margin) rather than gap_midpoint
 const WORD_BREAK_PRE_MARGIN_MS: u64 = 30;
@@ -218,11 +214,30 @@ pub struct TranscribeState {
     ptt_mode: bool,
     /// Growable buffer for PTT recordings (avoids ring buffer's 30s wraparound limit)
     ptt_buffer: Vec<f32>,
+    /// Minimum RMS amplitude for a segment to be queued for transcription.
+    /// Derived from the configured whisper VAD threshold: 10^(whisper_db / 20.0)
+    min_rms_threshold: f32,
 }
 
 impl TranscribeState {
-    /// Create a new transcribe state
+    /// Create a new transcribe state with the default RMS threshold.
     pub fn new(transcription_queue: Arc<TranscriptionQueue>) -> Self {
+        Self::with_whisper_threshold(transcription_queue, -52.0)
+    }
+
+    /// Create a new transcribe state with an RMS threshold derived from the given
+    /// whisper VAD threshold in dB.  The RMS gate is set to `10^(whisper_db / 20.0)`
+    /// so it is always aligned with the configured VAD sensitivity.
+    pub fn with_whisper_threshold(
+        transcription_queue: Arc<TranscriptionQueue>,
+        whisper_threshold_db: f32,
+    ) -> Self {
+        let min_rms_threshold = 10f32.powf(whisper_threshold_db / 20.0);
+        tracing::debug!(
+            "[TranscribeState] min_rms_threshold={:.6} (from whisper_db={:.1})",
+            min_rms_threshold,
+            whisper_threshold_db
+        );
         Self {
             ring_buffer: SegmentRingBuffer::with_default_capacity(),
             is_active: false,
@@ -238,6 +253,7 @@ impl TranscribeState {
             callback: None,
             ptt_mode: false,
             ptt_buffer: Vec::new(),
+            min_rms_threshold,
         }
     }
 
@@ -631,11 +647,11 @@ impl TranscribeState {
         let sum_squares: f32 = samples.iter().map(|s| s * s).sum();
         let rms = (sum_squares / samples.len() as f32).sqrt();
 
-        if rms < MIN_AUDIO_RMS_THRESHOLD {
-            tracing::debug!(
-                "[TranscribeState] Segment too quiet (RMS {:.6} < {:.6}), skipping",
+        if rms < self.min_rms_threshold {
+            tracing::warn!(
+                "[TranscribeState] Segment too quiet (RMS {:.6} < threshold {:.6}), skipping",
                 rms,
-                MIN_AUDIO_RMS_THRESHOLD
+                self.min_rms_threshold
             );
             return false;
         }
