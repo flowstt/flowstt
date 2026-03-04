@@ -1,9 +1,9 @@
 fn main() {
-    // Ensure the release DLL directory satisfies the Tauri resource glob on Windows.
+    // Ensure the release DLL directories satisfy the Tauri resource globs on Windows.
     //
-    // `tauri.windows.conf.json` declares `"../target/release/*.dll": "binaries/"` for
-    // bundling whisper.cpp libraries. `tauri_build::build()` validates that this glob
-    // resolves to at least one file and aborts if it doesn't.
+    // `tauri.windows.conf.json` declares resource globs for `../target/release/cuda/*.dll`
+    // and `../target/release/cpu/*.dll` for bundling whisper.cpp libraries. `tauri_build::build()`
+    // validates that these globs resolve to at least one file and aborts if they don't.
     //
     // The whisper DLLs are downloaded and placed there by the `flowstt-engine` build
     // script, which also runs during debug builds specifically for this purpose. However,
@@ -11,18 +11,18 @@ fn main() {
     // crates need to be built from scratch (e.g. after `cargo clean`). In that case the
     // glob validation fails before the DLLs exist.
     //
-    // Work around the race by creating a temporary placeholder DLL when the directory is
-    // empty. The engine build script overwrites it with the real library once it finishes.
+    // Work around the race by creating temporary placeholder DLLs when the directories
+    // are empty. The engine build script overwrites them with the real libraries once it finishes.
     #[cfg(target_os = "windows")]
-    ensure_release_dll_placeholder();
+    ensure_release_dll_placeholders();
 
     tauri_build::build();
 }
 
-/// Create a placeholder file in `target/release/` so the Tauri resource glob
-/// `../target/release/*.dll` matches at least one entry.
+/// Create placeholder files in `target/release/cuda/` and `target/release/cpu/`
+/// so the Tauri resource globs match at least one entry each.
 #[cfg(target_os = "windows")]
-fn ensure_release_dll_placeholder() {
+fn ensure_release_dll_placeholders() {
     use std::path::PathBuf;
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
@@ -36,23 +36,26 @@ fn ensure_release_dll_placeholder() {
     };
 
     let release_dir = target_dir.join("release");
-    let _ = std::fs::create_dir_all(&release_dir);
+    for subdir in &["cuda", "cpu"] {
+        let dir = release_dir.join(subdir);
+        let _ = std::fs::create_dir_all(&dir);
 
-    // If there are already real DLLs, nothing to do.
-    if let Ok(entries) = std::fs::read_dir(&release_dir) {
-        for entry in entries.flatten() {
-            if entry
-                .path()
-                .extension()
-                .map(|e| e == "dll")
-                .unwrap_or(false)
-            {
-                return;
-            }
+        // If there are already real DLLs, nothing to do for this subdir.
+        let has_dlls = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries.flatten().any(|e| {
+                    e.path()
+                        .extension()
+                        .map(|ext| ext == "dll")
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
+        if !has_dlls {
+            // Create a zero-byte placeholder; the engine build script will replace it.
+            let placeholder = dir.join(".tauri-placeholder.dll");
+            let _ = std::fs::File::create(&placeholder);
         }
     }
-
-    // Create a zero-byte placeholder; the engine build script will replace it.
-    let placeholder = release_dir.join(".tauri-placeholder.dll");
-    let _ = std::fs::File::create(&placeholder);
 }

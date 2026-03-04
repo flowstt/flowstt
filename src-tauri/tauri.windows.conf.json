@@ -2,7 +2,8 @@
   "bundle": {
     "targets": ["msi"],
     "resources": {
-      "../target/release/*.dll": "binaries/"
+      "../target/release/cuda/*.dll": "binaries/cuda/",
+      "../target/release/cpu/*.dll": "binaries/cpu/"
     }
   }
 }

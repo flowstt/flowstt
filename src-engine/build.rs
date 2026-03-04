@@ -41,33 +41,22 @@ fn main() {
         .map(|p| p.join("whisper-cache"))
         .unwrap_or_else(|| out_dir.join("whisper-cache"));
 
+    // Windows x64: download BOTH CUDA and CPU-only prebuilt binaries.
+    // They are placed in separate subdirectories (cuda/ and cpu/) so the app
+    // can try the CUDA variant first and fall back to CPU at runtime.
+    // The `cuda` feature flag has no effect on Windows (it is Linux-only).
+    if target_os == "windows" && target_arch == "x86_64" {
+        if cuda_enabled {
+            println!("cargo:warning=Note: --features cuda has no effect on Windows (GPU+CPU support is always included)");
+        }
+        download_windows_x64_dual_binaries(&stable_cache_dir, &out_dir);
+        println!("cargo:rerun-if-changed=build.rs");
+        return;
+    }
+
     // Determine which binary to download and which libraries to extract
-    // Windows x64 always uses CUDA-enabled binaries (automatic CPU fallback when no GPU)
     let (zip_name, lib_names): (&str, Vec<&str>) = match (target_os.as_str(), target_arch.as_str())
     {
-        ("windows", "x86_64") => {
-            println!(
-                "cargo:warning=Using CUDA-accelerated whisper.cpp binaries (auto CPU fallback)"
-            );
-            (
-                "whisper-cublas-12.4.0-bin-x64.zip",
-                vec![
-                    "whisper.dll",
-                    "ggml.dll",
-                    "ggml-base.dll",
-                    "ggml-cpu.dll",
-                    "ggml-cuda.dll",
-                    // CUDA runtime libraries
-                    "cublas64_12.dll",
-                    "cublasLt64_12.dll",
-                    "cudart64_12.dll",
-                    // Additional CUDA libraries required for GPU detection
-                    "nvrtc64_120_0.dll",
-                    "nvrtc-builtins64_124.dll",
-                    "nvblas64_12.dll",
-                ],
-            )
-        }
         ("windows", "x86") => (
             "whisper-bin-Win32.zip",
             vec!["whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll"],
@@ -94,17 +83,11 @@ fn main() {
     // Use stable cache directory for downloads (persists across rebuilds)
     fs::create_dir_all(&stable_cache_dir).expect("Failed to create cache directory");
 
-    // Include cuda in cache path to separate CUDA and non-CUDA builds
-    let cuda_suffix = if cuda_enabled { "-cuda" } else { "" };
-    let zip_path = stable_cache_dir.join(format!(
-        "whisper-{}-{}{}.zip",
-        WHISPER_VERSION, target_arch, cuda_suffix
-    ));
+    let zip_path =
+        stable_cache_dir.join(format!("whisper-{}-{}.zip", WHISPER_VERSION, target_arch));
     // Extracted libraries also go in stable cache (versioned to handle updates)
-    let lib_output_dir = stable_cache_dir.join(format!(
-        "whisper-{}-{}{}-lib",
-        WHISPER_VERSION, target_arch, cuda_suffix
-    ));
+    let lib_output_dir =
+        stable_cache_dir.join(format!("whisper-{}-{}-lib", WHISPER_VERSION, target_arch));
     fs::create_dir_all(&lib_output_dir).expect("Failed to create lib output directory");
 
     let primary_lib_path = lib_output_dir.join(primary_lib);
@@ -141,9 +124,9 @@ fn main() {
     // Copy all libraries to target directory for runtime
     copy_libraries_to_runtime(&lib_output_dir, &lib_names, &out_dir);
 
-    // macOS/Windows: Also copy to release directory for Tauri bundling (even in debug builds)
+    // macOS: Also copy to release directory for Tauri bundling (even in debug builds)
     // Tauri's build script validates bundle resources exist at configured paths
-    if target_os == "macos" || target_os == "windows" {
+    if target_os == "macos" {
         copy_libraries_for_tauri_bundle(&lib_output_dir, &lib_names, &out_dir);
     }
 
@@ -157,6 +140,156 @@ fn main() {
 
     // Rerun if build.rs changes
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+/// Download both CUDA and CPU-only prebuilt binaries for Windows x64.
+///
+/// The CUDA variant includes GPU acceleration via ggml-cuda.dll + CUDA runtime,
+/// but requires NVIDIA drivers (nvcuda.dll) to load. The CPU variant works on
+/// any machine. Both are placed in separate subdirectories so the app can try
+/// CUDA first and fall back to CPU at runtime.
+///
+/// Layout in target/release/ (picked up by Tauri bundling):
+///   cuda/  - CUDA-enabled DLLs (ggml.dll links to ggml-cuda.dll → nvcuda.dll)
+///   cpu/   - CPU-only DLLs (no CUDA dependency)
+///
+/// Both subdirs also get the VC++ runtime DLLs (msvcp140.dll, etc.) bundled.
+fn download_windows_x64_dual_binaries(stable_cache_dir: &Path, out_dir: &Path) {
+    fs::create_dir_all(stable_cache_dir).expect("Failed to create cache directory");
+
+    let target_dir = out_dir
+        .ancestors()
+        .find(|p| p.file_name().map(|n| n == "target").unwrap_or(false))
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| out_dir.join("..").join("..").join(".."));
+
+    let cuda_libs: Vec<&str> = vec![
+        "whisper.dll",
+        "ggml.dll",
+        "ggml-base.dll",
+        "ggml-cpu.dll",
+        "ggml-cuda.dll",
+        "cublas64_12.dll",
+        "cublasLt64_12.dll",
+        "cudart64_12.dll",
+        "nvrtc64_120_0.dll",
+        "nvrtc-builtins64_124.dll",
+        "nvblas64_12.dll",
+    ];
+
+    let cpu_libs: Vec<&str> = vec!["whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll"];
+
+    // Download and extract CUDA variant
+    let cuda_cache = stable_cache_dir.join(format!("whisper-{}-x86_64-cuda-lib", WHISPER_VERSION));
+    let cuda_zip = stable_cache_dir.join(format!("whisper-{}-x86_64-cuda.zip", WHISPER_VERSION));
+    fs::create_dir_all(&cuda_cache).expect("Failed to create CUDA cache directory");
+
+    if !cuda_cache.join("whisper.dll").exists() {
+        if !cuda_zip.exists() {
+            let url = format!(
+                "{}/v{}/whisper-cublas-12.4.0-bin-x64.zip",
+                GITHUB_RELEASE_BASE, WHISPER_VERSION
+            );
+            println!(
+                "cargo:warning=Downloading CUDA whisper.cpp binaries from: {}",
+                url
+            );
+            download_file(&url, &cuda_zip).expect("Failed to download CUDA whisper.cpp binary");
+        }
+        println!("cargo:warning=Extracting CUDA whisper.cpp libraries...");
+        extract_libraries(&cuda_zip, &cuda_cache, &cuda_libs, "windows", "x86_64")
+            .expect("Failed to extract CUDA whisper.cpp libraries");
+    }
+
+    // Download and extract CPU variant
+    let cpu_cache = stable_cache_dir.join(format!("whisper-{}-x86_64-cpu-lib", WHISPER_VERSION));
+    let cpu_zip = stable_cache_dir.join(format!("whisper-{}-x86_64-cpu.zip", WHISPER_VERSION));
+    fs::create_dir_all(&cpu_cache).expect("Failed to create CPU cache directory");
+
+    if !cpu_cache.join("whisper.dll").exists() {
+        if !cpu_zip.exists() {
+            let url = format!(
+                "{}/v{}/whisper-bin-x64.zip",
+                GITHUB_RELEASE_BASE, WHISPER_VERSION
+            );
+            println!(
+                "cargo:warning=Downloading CPU whisper.cpp binaries from: {}",
+                url
+            );
+            download_file(&url, &cpu_zip).expect("Failed to download CPU whisper.cpp binary");
+        }
+        println!("cargo:warning=Extracting CPU whisper.cpp libraries...");
+        extract_libraries(&cpu_zip, &cpu_cache, &cpu_libs, "windows", "x86_64")
+            .expect("Failed to extract CPU whisper.cpp libraries");
+    }
+
+    // Set linker search path (CUDA variant, has all symbols)
+    println!("cargo:rustc-link-search=native={}", cuda_cache.display());
+
+    // Copy to target/release/cuda/ and target/release/cpu/ for Tauri bundling
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let runtime_dir = target_dir.join(&profile);
+    let release_dir = target_dir.join("release");
+
+    for dir in [&runtime_dir, &release_dir] {
+        let cuda_dest = dir.join("cuda");
+        let cpu_dest = dir.join("cpu");
+        let _ = fs::create_dir_all(&cuda_dest);
+        let _ = fs::create_dir_all(&cpu_dest);
+
+        for lib in &cuda_libs {
+            let src = cuda_cache.join(lib);
+            let dest = cuda_dest.join(lib);
+            if src.exists() {
+                copy_if_changed(&src, &dest, lib);
+            }
+        }
+        for lib in &cpu_libs {
+            let src = cpu_cache.join(lib);
+            let dest = cpu_dest.join(lib);
+            if src.exists() {
+                copy_if_changed(&src, &dest, lib);
+            }
+        }
+
+        // Clean up placeholder DLLs created by src-tauri/build.rs
+        for subdir in [&cuda_dest, &cpu_dest] {
+            let placeholder = subdir.join(".tauri-placeholder.dll");
+            if placeholder.exists() {
+                let _ = fs::remove_file(&placeholder);
+            }
+        }
+    }
+
+    // Bundle VC++ runtime DLLs into BOTH cuda/ and cpu/ subdirs
+    bundle_vcruntime_dlls_to_subdir(out_dir, "cuda");
+    bundle_vcruntime_dlls_to_subdir(out_dir, "cpu");
+
+    // Write the primary library path for runtime discovery
+    let lib_path_file =
+        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set")).join("whisper_lib_path.txt");
+    fs::write(
+        &lib_path_file,
+        cuda_cache.join("whisper.dll").to_string_lossy().as_bytes(),
+    )
+    .expect("Failed to write library path file");
+
+    println!("cargo:warning=Windows x64: bundled both CUDA and CPU whisper.cpp variants");
+}
+
+/// Copy a file only if the destination doesn't exist or has a different size.
+fn copy_if_changed(src: &Path, dest: &Path, label: &str) {
+    let needs_copy = if dest.exists() {
+        fs::metadata(src).map(|m| m.len()).unwrap_or(0)
+            != fs::metadata(dest).map(|m| m.len()).unwrap_or(0)
+    } else {
+        true
+    };
+    if needs_copy {
+        if let Err(e) = fs::copy(src, dest) {
+            println!("cargo:warning=Failed to copy {}: {}", label, e);
+        }
+    }
 }
 
 /// Build whisper.cpp from source on Linux using CMake
@@ -525,6 +658,56 @@ fn copy_libraries_for_tauri_bundle(lib_dir: &Path, lib_names: &[&str], out_dir: 
     if placeholder.exists() {
         let _ = fs::remove_file(&placeholder);
     }
+}
+
+/// Bundle Visual C++ runtime DLLs for Windows into a specific subdirectory
+/// under target/release/ (and target/{profile}/).
+///
+/// The whisper.cpp prebuilt DLLs link against MSVCP140, VCRUNTIME140,
+/// VCRUNTIME140_1, and VCOMP140 (OpenMP). These are not part of Windows
+/// and must be present alongside the DLLs that need them.
+///
+/// We copy them from the build machine's System32 into the specified subdir
+/// so Tauri bundles them alongside the whisper DLLs.
+fn bundle_vcruntime_dlls_to_subdir(out_dir: &Path, subdir: &str) {
+    let target_dir = out_dir
+        .ancestors()
+        .find(|p| p.file_name().map(|n| n == "target").unwrap_or(false))
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| out_dir.join("..").join("..").join(".."));
+
+    let system32 = PathBuf::from(env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()))
+        .join("System32");
+
+    let vcrt_dlls = [
+        "msvcp140.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "vcomp140.dll",
+    ];
+
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let dirs = [
+        target_dir.join(&profile).join(subdir),
+        target_dir.join("release").join(subdir),
+    ];
+
+    for dest_dir in &dirs {
+        let _ = fs::create_dir_all(dest_dir);
+        for dll in &vcrt_dlls {
+            let src = system32.join(dll);
+            let dest = dest_dir.join(dll);
+            if src.exists() {
+                copy_if_changed(&src, &dest, dll);
+            } else {
+                println!(
+                    "cargo:warning=VC++ runtime not found on build machine: {} (target machines may fail to load whisper DLLs)",
+                    src.display()
+                );
+            }
+        }
+    }
+    println!("cargo:warning=Bundled VC++ runtime DLLs into {}/", subdir);
 }
 
 fn download_file(url: &str, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {

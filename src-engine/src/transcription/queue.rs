@@ -11,6 +11,7 @@ use std::thread;
 
 use crate::audio::{process_recorded_audio, RawRecordedAudio};
 
+use super::whisper_ffi;
 use super::Transcriber;
 
 /// Maximum queue size for transcription segments
@@ -46,6 +47,54 @@ pub trait TranscriptionCallback: Send + Sync + 'static {
 
     /// Called when the queue depth changes.
     fn on_queue_update(&self, depth: usize);
+}
+
+/// Log which compute backend (GPU or CPU) the transcription engine is using.
+///
+/// Called once after the whisper model loads successfully. On Linux CPU-only
+/// builds (no `cuda` feature) the whisper library is compiled without any GPU
+/// backend, so no warning is emitted — CPU is the expected and only option.
+fn log_gpu_backend() {
+    #[cfg(all(target_os = "linux", not(feature = "cuda")))]
+    {
+        tracing::info!(
+            "[TranscriptionQueue] Transcription engine initialized (CPU inference, Linux CPU-only build)"
+        );
+        return;
+    }
+
+    #[cfg(not(all(target_os = "linux", not(feature = "cuda"))))]
+    match whisper_ffi::get_system_info() {
+        Ok(info) => {
+            let gpu_active = info.contains("CUDA : ARCHS")
+                || info.contains("METAL = 1")
+                || info.contains("VULKAN = 1");
+
+            if gpu_active {
+                let backend = if info.contains("CUDA : ARCHS") {
+                    "CUDA"
+                } else if info.contains("METAL = 1") {
+                    "Metal"
+                } else {
+                    "Vulkan"
+                };
+                tracing::info!(
+                    "[TranscriptionQueue] Transcription engine initialized with GPU acceleration ({})",
+                    backend
+                );
+            } else {
+                tracing::warn!(
+                    "[TranscriptionQueue] No compatible GPU found — transcription engine falling back to CPU inference"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "[TranscriptionQueue] Could not determine GPU backend: {} — assuming CPU inference",
+                e
+            );
+        }
+    }
 }
 
 /// Queue for managing transcription segments.
@@ -131,6 +180,8 @@ impl TranscriptionQueue {
             if model_path.exists() {
                 if let Err(e) = transcriber.load_model() {
                     tracing::error!("[TranscriptionQueue] Failed to load model: {}", e);
+                } else {
+                    log_gpu_backend();
                 }
             }
 

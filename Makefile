@@ -9,7 +9,7 @@
         run-cli run-cli-release \
         lint lint-rust lint-ts test \
         install-deps check-binaries help \
-        package package-release
+        package package-local package-release
 
 # Default target
 all: build
@@ -178,12 +178,19 @@ check-binaries:
 # Packaging
 # =============================================================================
 
-# Package the application (build installers)
+# Package the application (build installers) — requires signing credentials
 package: build-release
 	@echo "==> Building Tauri application package..."
 	pnpm tauri build
 	@echo "==> Package complete!"
-	@echo "Installers available in: src-tauri/target/release/bundle/"
+	@echo "Installers available in: target/release/bundle/"
+
+# Package unsigned installer for local testing (no signing credentials required)
+package-local: build-release
+	@echo "==> Building unsigned Tauri application package (local testing only)..."
+	pnpm tauri build --config src-tauri/tauri.local.conf.json
+	@echo "==> Package complete!"
+	@echo "Installers available in: target/release/bundle/"
 
 # Package the application (release mode with all optimizations)
 package-release: package
@@ -229,11 +236,12 @@ help:
 	@echo "  help             Show this help message"
 	@echo ""
 	@echo "Packaging Targets:"
-	@echo "  package          Build all binaries and create installers"
+	@echo "  package          Build all binaries and create installers (requires signing credentials)"
+	@echo "  package-local    Build unsigned installer for local testing (no credentials required)"
 	@echo "  package-release  Same as package (release mode)"
 	@echo ""
-	@echo "CUDA Acceleration:"
+	@echo "CUDA Acceleration (Linux only):"
 	@echo "  The 'cuda' targets enable GPU-accelerated transcription via whisper.cpp."
 	@echo "  - Linux: Requires NVIDIA CUDA Toolkit (nvcc, cuBLAS) at build time"
-	@echo "  - Windows: CUDA binaries always used (auto CPU fallback when no GPU)"
+	@echo "  - Windows: No effect (GPU+CPU backends always included; selected at runtime)"
 	@echo "  - macOS: No effect (Metal acceleration is always used)"
