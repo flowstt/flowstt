@@ -230,6 +230,27 @@ async fn stop_capture() {
     info!("Audio capture stopped");
 }
 
+/// Restart audio capture if it is currently running.
+///
+/// Used after config changes that require the audio loop to be recreated
+/// (e.g. mic gain, VAD sensitivity) so the new values take effect immediately.
+async fn restart_capture_if_active() {
+    let is_active = {
+        let state_arc = get_service_state();
+        let state = state_arc.lock().await;
+        state.transcribe_status.capturing
+            || (state.transcription_mode == flowstt_common::TranscriptionMode::PushToTalk
+                && ptt_controller::is_ptt_controller_running())
+    };
+
+    if is_active {
+        stop_capture().await;
+        if let Err(e) = start_capture().await {
+            warn!("Failed to restart capture after config change: {}", e);
+        }
+    }
+}
+
 /// Handle an IPC request and return a response.
 pub async fn handle_request(request: Request) -> Response {
     // Validate request
@@ -755,6 +776,7 @@ pub async fn handle_request(request: Request) -> Response {
                 warn!("Failed to save config: {}", e);
             }
             info!("mic_gain set to {:.2}", gain);
+            restart_capture_if_active().await;
             Response::Ok
         }
 
@@ -777,6 +799,7 @@ pub async fn handle_request(request: Request) -> Response {
                 warn!("Failed to save config: {}", e);
             }
             info!("vad_sensitivity set to {}", sensitivity);
+            restart_capture_if_active().await;
             Response::Ok
         }
 
