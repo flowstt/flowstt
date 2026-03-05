@@ -25,8 +25,18 @@ use crate::transcription::{TranscribeState, TranscriptionCallback, Transcription
 /// Global audio processing thread control
 static AUDIO_LOOP_ACTIVE: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
+/// Set to false by the loop thread just before it exits, so stop_audio_loop()
+/// can block until the thread has actually finished.
+static AUDIO_LOOP_RUNNING: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
 fn get_loop_active() -> Arc<AtomicBool> {
     AUDIO_LOOP_ACTIVE
+        .get_or_init(|| Arc::new(AtomicBool::new(false)))
+        .clone()
+}
+
+fn get_loop_running() -> Arc<AtomicBool> {
+    AUDIO_LOOP_RUNNING
         .get_or_init(|| Arc::new(AtomicBool::new(false)))
         .clone()
 }
@@ -47,6 +57,10 @@ pub fn start_audio_loop(
 
     let loop_active = get_loop_active();
     loop_active.store(true, Ordering::SeqCst);
+
+    // Mark the thread as running before spawning so stop_audio_loop() can wait on it.
+    let loop_running = get_loop_running();
+    loop_running.store(true, Ordering::SeqCst);
 
     // Get sample rate from backend
     let sample_rate = platform::get_backend()
@@ -165,14 +179,27 @@ pub fn start_audio_loop(
         }
 
         tracing::info!("[AudioLoop] Audio processing loop stopped");
+        // Signal that this thread has fully exited so stop_audio_loop() can unblock.
+        get_loop_running().store(false, Ordering::SeqCst);
     });
 
     Ok(())
 }
 
-/// Stop the audio processing loop
+/// Stop the audio processing loop and block until the thread has exited.
+///
+/// Signals the loop to stop via the active flag, then spins until the thread
+/// clears the running flag. This prevents a race where start_audio_loop() is
+/// called before the previous thread has fully exited.
 pub fn stop_audio_loop() {
     get_loop_active().store(false, Ordering::SeqCst);
+
+    // Wait for the loop thread to actually exit (it clears loop_running on exit).
+    // The thread sleeps 1ms when idle, so this rarely takes more than a few ms.
+    let loop_running = get_loop_running();
+    while loop_running.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(1));
+    }
 }
 
 /// Convert multi-channel audio to mono

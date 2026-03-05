@@ -501,6 +501,12 @@ fn start_ptt_audio_loop() {
         .map(|b| b.sample_rate())
         .unwrap_or(48000);
 
+    // Load mic gain at loop start (same as main audio_loop)
+    let config = crate::config::Config::load();
+    let mic_gain = config.mic_gain.clamp(1.0, 4.0);
+
+    tracing::info!("[PTT AudioLoop] mic_gain={:.2}", mic_gain,);
+
     let transcribe_state = get_transcribe_state();
 
     thread::spawn(move || {
@@ -526,7 +532,14 @@ fn start_ptt_audio_loop() {
             // Try to receive audio from backend
             let audio_data = platform::get_backend().and_then(|b| b.try_recv());
 
-            if let Some(data) = audio_data {
+            if let Some(mut data) = audio_data {
+                // Apply input gain and clamp to valid sample range
+                if mic_gain != 1.0 {
+                    for s in data.samples.iter_mut() {
+                        *s = (*s * mic_gain).clamp(-1.0, 1.0);
+                    }
+                }
+
                 // Convert to mono for visualization
                 let mono_samples = convert_to_mono(&data.samples, data.channels as usize);
 
