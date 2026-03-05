@@ -39,7 +39,6 @@ interface ConfigValues {
   auto_paste_delay_ms: number;
   restore_clipboard_enabled: boolean;
   mic_gain: number;
-  vad_sensitivity: string;
 }
 
 // Display names for key codes (snake_case serde name -> display)
@@ -177,7 +176,6 @@ let recorderStatusEl: HTMLSpanElement;
 let warningEl: HTMLDivElement;
 let addHotkeyBtn: HTMLButtonElement;
 let restoreClipboardCheckbox: HTMLInputElement;
-let vadSensitivitySelect: HTMLSelectElement;
 let micGainSlider: HTMLInputElement;
 let micGainValueEl: HTMLSpanElement;
 // Toggle hotkey UI - disabled for now
@@ -619,7 +617,6 @@ async function loadState() {
     restoreClipboardCheckbox.checked = config.restore_clipboard_enabled;
 
     // Audio detection settings
-    vadSensitivitySelect.value = config.vad_sensitivity ?? "medium";
     const gain = config.mic_gain ?? 1.0;
     micGainSlider.value = String(gain);
     micGainValueEl.textContent = gain.toFixed(1);
@@ -661,7 +658,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   warningEl = document.getElementById("hotkey-warning") as HTMLDivElement;
   addHotkeyBtn = document.getElementById("add-hotkey-btn") as HTMLButtonElement;
   restoreClipboardCheckbox = document.getElementById("restore-clipboard-checkbox") as HTMLInputElement;
-  vadSensitivitySelect = document.getElementById("vad-sensitivity-select") as HTMLSelectElement;
   micGainSlider = document.getElementById("mic-gain-slider") as HTMLInputElement;
   micGainValueEl = document.getElementById("mic-gain-value") as HTMLSpanElement;
   // Toggle hotkey UI - disabled for now
@@ -706,14 +702,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       await invoke("set_restore_clipboard", { enabled: restoreClipboardCheckbox.checked });
     } catch (error) {
       console.error("Failed to set restore clipboard:", error);
-    }
-  });
-
-  vadSensitivitySelect.addEventListener("change", async () => {
-    try {
-      await invoke("set_vad_sensitivity", { sensitivity: vadSensitivitySelect.value });
-    } catch (error) {
-      console.error("Failed to set VAD sensitivity:", error);
     }
   });
 

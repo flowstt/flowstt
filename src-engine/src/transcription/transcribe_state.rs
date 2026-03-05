@@ -220,23 +220,13 @@ pub struct TranscribeState {
 }
 
 impl TranscribeState {
-    /// Create a new transcribe state with the default RMS threshold.
+    /// Create a new transcribe state.
     pub fn new(transcription_queue: Arc<TranscriptionQueue>) -> Self {
-        Self::with_whisper_threshold(transcription_queue, -52.0)
-    }
-
-    /// Create a new transcribe state with an RMS threshold derived from the given
-    /// whisper VAD threshold in dB.  The RMS gate is set to `10^(whisper_db / 20.0)`
-    /// so it is always aligned with the configured VAD sensitivity.
-    pub fn with_whisper_threshold(
-        transcription_queue: Arc<TranscriptionQueue>,
-        whisper_threshold_db: f32,
-    ) -> Self {
-        let min_rms_threshold = 10f32.powf(whisper_threshold_db / 20.0);
+        // Fixed whisper VAD threshold: -52 dB → RMS gate = 10^(-52/20)
+        let min_rms_threshold = 10f32.powf(-52.0_f32 / 20.0);
         tracing::debug!(
-            "[TranscribeState] min_rms_threshold={:.6} (from whisper_db={:.1})",
-            min_rms_threshold,
-            whisper_threshold_db
+            "[TranscribeState] min_rms_threshold={:.6}",
+            min_rms_threshold
         );
         Self {
             ring_buffer: SegmentRingBuffer::with_default_capacity(),

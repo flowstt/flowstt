@@ -67,25 +67,17 @@ pub fn start_audio_loop(
         .map(|b| b.sample_rate())
         .unwrap_or(48000);
 
-    // Load config once at loop start for gain and VAD sensitivity
+    // Load config once at loop start for gain
     let config = crate::config::Config::load();
     let mic_gain = config.mic_gain.clamp(1.0, 4.0);
-    let (voiced_db, whisper_db) = config.vad_sensitivity.thresholds();
 
-    tracing::info!(
-        "[AudioLoop] mic_gain={:.2}, vad_sensitivity={:?} (voiced={:.0}dB, whisper={:.0}dB)",
-        mic_gain,
-        config.vad_sensitivity,
-        voiced_db,
-        whisper_db
-    );
+    tracing::info!("[AudioLoop] mic_gain={:.2}", mic_gain);
 
     thread::spawn(move || {
         tracing::info!("[AudioLoop] Starting audio processing loop");
 
-        // Create speech detector with configured sensitivity thresholds
-        let mut speech_detector =
-            SpeechDetector::with_thresholds(sample_rate, voiced_db, whisper_db);
+        // Create speech detector with fixed VAD thresholds (-42 dB voiced / -52 dB whisper)
+        let mut speech_detector = SpeechDetector::with_thresholds(sample_rate, -42.0, -52.0);
         speech_detector.set_callback(Arc::new(SpeechEventBroadcaster));
 
         // Create visualization processor

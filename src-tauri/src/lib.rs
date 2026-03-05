@@ -598,19 +598,6 @@ async fn set_mic_gain(gain: f32) -> Result<(), String> {
     }
 }
 
-/// Set the VAD sensitivity preset ("low", "medium", or "high")
-#[tauri::command]
-async fn set_vad_sensitivity(sensitivity: String) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetVadSensitivity { sensitivity })
-            .await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
-}
-
 /// History entry struct for frontend compatibility
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LocalHistoryEntry {
@@ -1291,7 +1278,6 @@ pub fn run() {
             get_config,
             set_restore_clipboard,
             set_mic_gain,
-            set_vad_sensitivity,
             get_history,
             delete_history_entry,
             connect_events,

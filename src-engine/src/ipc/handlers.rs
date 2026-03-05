@@ -33,11 +33,7 @@ pub fn get_transcribe_state() -> Arc<std::sync::Mutex<TranscribeState>> {
     TRANSCRIBE_STATE
         .get_or_init(|| {
             let queue = get_transcription_queue();
-            let config = crate::config::Config::load();
-            let (_, whisper_db) = config.vad_sensitivity.thresholds();
-            Arc::new(std::sync::Mutex::new(
-                TranscribeState::with_whisper_threshold(queue, whisper_db),
-            ))
+            Arc::new(std::sync::Mutex::new(TranscribeState::new(queue)))
         })
         .clone()
 }
@@ -437,7 +433,6 @@ pub async fn handle_request(request: Request) -> Response {
                 auto_paste_delay_ms: config.auto_paste_delay_ms,
                 restore_clipboard_enabled: config.restore_clipboard_enabled,
                 mic_gain: config.mic_gain,
-                vad_sensitivity: format!("{:?}", config.vad_sensitivity).to_lowercase(),
             })
         }
 
@@ -653,7 +648,6 @@ pub async fn handle_request(request: Request) -> Response {
                 auto_paste_delay_ms: config.auto_paste_delay_ms,
                 restore_clipboard_enabled: config.restore_clipboard_enabled,
                 mic_gain: config.mic_gain,
-                vad_sensitivity: format!("{:?}", config.vad_sensitivity).to_lowercase(),
             })
         }
 
@@ -776,29 +770,6 @@ pub async fn handle_request(request: Request) -> Response {
                 warn!("Failed to save config: {}", e);
             }
             info!("mic_gain set to {:.2}", gain);
-            restart_capture_if_active().await;
-            Response::Ok
-        }
-
-        Request::SetVadSensitivity { sensitivity } => {
-            use flowstt_common::config::VadSensitivity;
-            let vad = match sensitivity.to_lowercase().as_str() {
-                "low" => VadSensitivity::Low,
-                "medium" => VadSensitivity::Medium,
-                "high" => VadSensitivity::High,
-                other => {
-                    return Response::error(format!(
-                        "Invalid vad_sensitivity '{}'. Use 'low', 'medium', or 'high'.",
-                        other
-                    ));
-                }
-            };
-            let mut config = crate::config::Config::load();
-            config.vad_sensitivity = vad;
-            if let Err(e) = crate::config::save_config(&config) {
-                warn!("Failed to save config: {}", e);
-            }
-            info!("vad_sensitivity set to {}", sensitivity);
             restart_capture_if_active().await;
             Response::Ok
         }

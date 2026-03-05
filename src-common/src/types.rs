@@ -471,9 +471,6 @@ pub struct ConfigValues {
     /// Microphone input gain multiplier (1.0–4.0, default 1.0)
     #[serde(default = "default_mic_gain")]
     pub mic_gain: f32,
-    /// VAD sensitivity preset: "low", "medium", or "high" (default "medium")
-    #[serde(default = "default_vad_sensitivity")]
-    pub vad_sensitivity: String,
 }
 
 fn default_auto_paste_enabled() -> bool {
@@ -490,10 +487,6 @@ fn default_restore_clipboard_enabled() -> bool {
 
 fn default_mic_gain() -> f32 {
     1.0
-}
-
-fn default_vad_sensitivity() -> String {
-    "medium".to_string()
 }
 
 /// Push-to-talk status information.

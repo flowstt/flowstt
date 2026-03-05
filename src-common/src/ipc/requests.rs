@@ -90,12 +90,6 @@ pub enum Request {
         /// Gain multiplier applied to mic samples before VAD and transcription
         gain: f32,
     },
-    /// Set the VAD sensitivity preset: "low", "medium", or "high"
-    SetVadSensitivity {
-        /// Sensitivity preset name
-        sensitivity: String,
-    },
-
     // === History Management ===
     /// Get all transcription history entries
     GetHistory,
