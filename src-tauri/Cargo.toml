@@ -5,16 +5,11 @@ description = "FlowSTT - Speech to Text GUI"
 authors = ["you"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [features]
 default = []
-cuda = ["flowstt-engine/cuda"]
+cuda = ["vtx-engine/cuda"]
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "flowstt_lib"
 crate-type = ["cdylib", "rlib"]
 
@@ -27,6 +22,7 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
+directories = "5"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "io-util", "net"] }
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -34,19 +30,30 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "regist
 zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["clock"] }
 
-# Shared types and IPC protocol
+# vtx-engine: audio capture, speech detection, transcription
+vtx-engine = "0.1.0"
+vtx-common = "0.1.0"
+
+# FlowSTT IPC protocol and app config types
 flowstt-common = { path = "../src-common" }
 
-# Core engine - audio capture, transcription, IPC server
-flowstt-engine = { path = "../src-engine" }
 tauri-plugin-dialog = "2"
 
-# Desktop-only plugins (not applicable to mobile)
+# Desktop-only plugins
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
-# Windows-specific dependencies for named pipes and Win32 APIs
+# Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
 tokio = { version = "1", features = ["net"] }
-windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

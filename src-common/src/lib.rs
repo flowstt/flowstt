@@ -2,6 +2,9 @@
 //!
 //! Shared types and IPC protocol for communication between the FlowSTT CLI,
 //! service, and GUI components.
+//!
+//! Audio/transcription types are re-exported from `vtx-common`. FlowSTT-specific
+//! types (IPC protocol, app config, runtime mode) are defined here.
 
 use std::sync::OnceLock;
 
@@ -12,7 +15,19 @@ pub mod security;
 pub mod types;
 
 pub use config::ThemeMode;
-pub use types::*;
+
+// Re-export shared audio/transcription types from vtx-common.
+// These replace the duplicate definitions previously in flowstt-common.
+pub use vtx_common::{
+    AudioDevice, AudioSourceType, HotkeyCombination, KeyCode, RecordingMode, TranscriptionMode,
+    TranscriptionResult, ModelStatus, HistoryEntry,
+};
+
+// FlowSTT-specific types still defined locally
+pub use types::{
+    CudaStatus, ConfigValues, PttStatus, TranscribeStatus, VisualizationData, SpeechMetrics,
+    SpectrogramColumn, RuntimeMode,
+};
 
 static RUNTIME_MODE: OnceLock<RuntimeMode> = OnceLock::new();
 

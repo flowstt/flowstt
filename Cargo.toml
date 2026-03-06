@@ -1,3 +1,24 @@
 [workspace]
-members = ["src-tauri", "src-common", "src-engine", "src-cli"]
+members = ["src-tauri", "src-common", "src-cli"]
 resolver = "2"
+
+# =============================================================================
+# Local development override
+#
+# Uncomment the [patch.crates-io] block below to build FlowSTT against a local
+# checkout of vtx-engine (expected at ../vtx-engine relative to this workspace).
+#
+# Usage:
+#   1. Checkout vtx-engine at ~/ws/vtx-engine (sibling to ~/ws/flowstt/flowstt)
+#      i.e. ../../vtx-engine relative to this Cargo.toml
+#   2. Uncomment the two lines in [patch.crates-io] below
+#   3. Run `cargo build` -- vtx-engine resolves from the local path
+#   4. Re-comment the block before committing (CI always uses the registry version)
+#
+# NOTE: vtx-engine is not yet published to crates.io.
+# The [patch.crates-io] block below is required until the crate is published.
+# Once published, uncomment the version lines above, comment out the patch block below,
+# and update the versions in src-tauri/Cargo.toml to match.
+[patch.crates-io]
+vtx-engine = { path = "../../vtx-engine/crates/vtx-engine" }
+vtx-common = { path = "../../vtx-engine/crates/vtx-common" }

@@ -2,10 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{
-    AudioDevice, ConfigValues, CudaStatus, HistoryEntry, ModelStatus, PttStatus, TranscribeStatus,
-    TranscriptionResult, VisualizationData,
-};
+use crate::types::{ConfigValues, CudaStatus, PttStatus, TranscribeStatus, VisualizationData};
+use vtx_common::{AudioDevice, HistoryEntry, ModelStatus, TranscriptionResult};
 
 /// IPC response from service to client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,13 +106,13 @@ pub enum EventType {
     /// Transcription mode changed (Auto vs PTT)
     TranscriptionModeChanged {
         /// The new transcription mode
-        mode: crate::types::TranscriptionMode,
+        mode: vtx_common::TranscriptionMode,
     },
 
     /// Auto mode toggled via hotkey
     AutoModeToggled {
         /// The new transcription mode
-        mode: crate::types::TranscriptionMode,
+        mode: vtx_common::TranscriptionMode,
     },
 
     /// A history entry was deleted

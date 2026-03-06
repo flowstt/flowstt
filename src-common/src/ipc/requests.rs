@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{AudioSourceType, HotkeyCombination, RecordingMode, TranscriptionMode};
+use vtx_common::{AudioSourceType, HotkeyCombination, RecordingMode, TranscriptionMode};
 
 /// IPC request from client to service.
 #[derive(Debug, Clone, Serialize, Deserialize)]

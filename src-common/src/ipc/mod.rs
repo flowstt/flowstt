@@ -1,6 +1,6 @@
 //! IPC protocol for client-service communication.
 
-mod protocol;
+pub mod protocol;
 mod requests;
 mod responses;
 

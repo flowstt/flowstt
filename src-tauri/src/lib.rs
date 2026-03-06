@@ -1,17 +1,18 @@
-//! FlowSTT GUI - Tauri application with integrated engine.
+//! FlowSTT GUI - Tauri application with vtx-engine integration.
 //!
-//! The engine (audio capture, transcription, IPC server) runs in-process.
-//! Tauri commands call engine functions directly without IPC serialization.
+//! The audio/transcription engine (vtx-engine) runs in-process.
+//! Tauri commands call AudioEngine methods directly.
 //! The IPC socket server is hosted by this process for CLI client access.
 
 mod tray;
+mod ipc;
 
 use flowstt_common::config::{Config, LogLevel, ThemeMode};
-use flowstt_common::ipc::{EventType, Request, Response};
 use flowstt_common::{
-    runtime_mode, AudioDevice, ConfigValues, HotkeyCombination, RecordingMode, RuntimeMode,
-    TranscriptionMode,
+    runtime_mode, ConfigValues, HotkeyCombination, RecordingMode, RuntimeMode, TranscriptionMode,
 };
+use vtx_common::{AudioDevice, EngineEvent, ModelStatus};
+use vtx_engine::{AudioEngine, EngineBuilder, EngineConfig};
 use std::env;
 use std::sync::Arc;
 use std::time::Instant;
@@ -44,13 +45,6 @@ fn configure_wayland_workarounds() {}
 
 // ─── Log line payload (emitted to frontend) ──────────────────────────────────
 
-/// A single pre-formatted log line sent to the frontend log viewer.
-///
-/// The line is formatted identically to what `tracing_subscriber::fmt` writes
-/// to the log file, so history (read from file) and live events render the same.
-///
-/// Format: `{timestamp}  {LEVEL} {target}: {message}\n`
-/// e.g.  `2026-03-02T00:27:33.464210Z  INFO flowstt_lib: engine started`
 #[derive(serde::Serialize, Clone)]
 struct LogLinePayload {
     line: String,
@@ -58,9 +52,6 @@ struct LogLinePayload {
 
 // ─── TauriLogLayer ───────────────────────────────────────────────────────────
 
-/// A `tracing_subscriber::Layer` that forwards log events to the frontend
-/// via a bounded mpsc channel. The channel receiver is drained by a task
-/// spawned once `AppHandle` is available (after `Builder::build()`).
 struct TauriLogLayer {
     sender: tokio::sync::mpsc::Sender<LogLinePayload>,
 }
@@ -93,13 +84,9 @@ where
         let mut visitor = MessageVisitor(String::new());
         event.record(&mut visitor);
 
-        // Format identically to tracing_subscriber::fmt's default output so that
-        // live events and file-read history look the same in the log viewer.
-        // File format: "2026-03-02T00:27:33.464210Z  INFO flowstt_lib: message"
         let now = chrono::Utc::now();
         let level = event.metadata().level().to_string().to_uppercase();
         let target = event.metadata().target();
-        // Pad level to 5 chars (matching tracing_subscriber's default alignment)
         let line = format!(
             "{}  {:5} {}: {}",
             now.format("%Y-%m-%dT%H:%M:%S%.6fZ"),
@@ -108,25 +95,16 @@ where
             visitor.0,
         );
         let payload = LogLinePayload { line };
-
-        // Non-blocking send; drop if channel is full to avoid blocking the caller.
         let _ = self.sender.try_send(payload);
     }
 }
 
-// ─── Log state (reload handle + channel sender) ──────────────────────────────
+// ─── Log state ───────────────────────────────────────────────────────────────
 
-/// State holding the runtime-reloadable log filter handle and log-line sender.
 struct LogState {
-    /// Allows reloading the `EnvFilter` at runtime (e.g. from `set_log_level`).
     reload_handle: Arc<reload::Handle<EnvFilter, tracing_subscriber::Registry>>,
 }
 
-/// Initialize the layered tracing subscriber.
-///
-/// Returns:
-/// - A `LogState` containing the reload handle (stored in Tauri state).
-/// - An mpsc receiver for log lines (consumed by a forwarder task after app build).
 fn init_logging(initial_level: &LogLevel) -> (LogState, tokio::sync::mpsc::Receiver<LogLinePayload>) {
     let mode = runtime_mode();
     let filter_str = EnvFilter::try_from_default_env()
@@ -134,18 +112,11 @@ fn init_logging(initial_level: &LogLevel) -> (LogState, tokio::sync::mpsc::Recei
 
     let (filter_layer, reload_handle) = reload::Layer::new(filter_str);
 
-    // Bounded channel: 1000 log lines buffered for frontend forwarding.
     let (tx, rx) = tokio::sync::mpsc::channel::<LogLinePayload>(1000);
     let tauri_layer = TauriLogLayer { sender: tx };
 
-    // Both production and development write to the log file.
-    // Development additionally writes to stdout with ANSI color.
     if let Err(e) = flowstt_common::logging::ensure_log_dir() {
-        // pre-subscriber bootstrap: cannot use tracing yet
-        eprintln!(
-            "Warning: Failed to create log directory, using temp dir: {}",
-            e
-        );
+        eprintln!("Warning: Failed to create log directory: {}", e);
     }
 
     let log_path = flowstt_common::logging::app_log_path();
@@ -160,7 +131,6 @@ fn init_logging(initial_level: &LogLevel) -> (LogState, tokio::sync::mpsc::Recei
     {
         Ok(appender) => appender,
         Err(e) => {
-            // pre-subscriber bootstrap: cannot use tracing yet
             eprintln!("Warning: Failed to create log file appender: {}", e);
             let temp_dir = std::env::temp_dir().join("flowstt-logs");
             let _ = std::fs::create_dir_all(&temp_dir);
@@ -174,11 +144,6 @@ fn init_logging(initial_level: &LogLevel) -> (LogState, tokio::sync::mpsc::Recei
         }
     };
 
-    // Use the rolling appender directly (synchronous) instead of non_blocking.
-    // Non-blocking buffers writes in a background channel; forgetting the guard
-    // means that buffer is never flushed, so the log file is empty until the
-    // channel fills or the app exits. Synchronous writes go to the OS
-    // immediately, so get_log_history can read them right away.
     let file_fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_appender)
         .with_ansi(false);
@@ -192,7 +157,6 @@ fn init_logging(initial_level: &LogLevel) -> (LogState, tokio::sync::mpsc::Recei
                 .init();
         }
         RuntimeMode::Development => {
-            // In development: also write to stdout with ANSI color for live terminal feedback.
             let stdout_fmt_layer = tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
                 .with_ansi(true);
@@ -215,32 +179,26 @@ fn init_logging(initial_level: &LogLevel) -> (LogState, tokio::sync::mpsc::Recei
 
 // ─── Application state ───────────────────────────────────────────────────────
 
-/// Application state shared between Tauri commands.
+/// Engine held in Tauri managed state.
+struct EngineState {
+    engine: Arc<AudioEngine>,
+}
+
+/// IPC server handle and PTT controller state.
 struct AppState {
-    /// Handle to the IPC server task
     ipc_server_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
-// ─── Event callback for Tauri frontend ───────────────────────────────────────
-
-/// Forwards engine events directly to the Tauri frontend via emit().
-struct TauriEventCallback {
-    app_handle: AppHandle,
-}
-
-impl flowstt_engine::ipc::EventCallback for TauriEventCallback {
-    fn on_event(&self, event: &EventType) {
-        forward_event_to_tauri(&self.app_handle, event);
-    }
-}
+// ─── Forward EngineEvents to Tauri frontend ───────────────────────────────────
 
 /// Forward an engine event to the Tauri frontend.
-fn forward_event_to_tauri(app_handle: &AppHandle, event: &EventType) {
+/// VisualizationData events are discarded (no visualization window).
+fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent) {
     match event {
-        EventType::VisualizationData(data) => {
-            let _ = app_handle.emit("visualization-data", data);
+        EngineEvent::VisualizationData(_) => {
+            // Visualization window removed — discard silently.
         }
-        EventType::TranscriptionComplete(result) => {
+        EngineEvent::TranscriptionComplete(result) => {
             let _ = app_handle.emit("transcription-complete", result);
 
             // On Windows, WebView2 can enter a frozen rendering state when
@@ -263,13 +221,13 @@ fn forward_event_to_tauri(app_handle: &AppHandle, event: &EventType) {
                 }
             }
         }
-        EventType::SpeechStarted => {
+        EngineEvent::SpeechStarted => {
             let _ = app_handle.emit("speech-started", ());
         }
-        EventType::SpeechEnded { duration_ms } => {
+        EngineEvent::SpeechEnded { duration_ms } => {
             let _ = app_handle.emit("speech-ended", duration_ms);
         }
-        EventType::CaptureStateChanged { capturing, error } => {
+        EngineEvent::CaptureStateChanged { capturing, error } => {
             #[derive(serde::Serialize, Clone)]
             struct CaptureState {
                 capturing: bool,
@@ -284,16 +242,13 @@ fn forward_event_to_tauri(app_handle: &AppHandle, event: &EventType) {
             );
             tray::update_tray_icon(app_handle, *capturing);
         }
-        EventType::ModelDownloadProgress { percent } => {
+        EngineEvent::ModelDownloadProgress { percent } => {
             let _ = app_handle.emit("model-download-progress", percent);
         }
-        EventType::ModelDownloadComplete { success } => {
+        EngineEvent::ModelDownloadComplete { success } => {
             let _ = app_handle.emit("model-download-complete", success);
         }
-        EventType::AudioLevelUpdate {
-            device_id,
-            level_db,
-        } => {
+        EngineEvent::AudioLevelUpdate { device_id, level_db } => {
             #[derive(serde::Serialize, Clone)]
             struct AudioLevel {
                 device_id: String,
@@ -307,111 +262,64 @@ fn forward_event_to_tauri(app_handle: &AppHandle, event: &EventType) {
                 },
             );
         }
-        EventType::PttPressed => {
-            let _ = app_handle.emit("ptt-pressed", ());
-        }
-        EventType::PttReleased => {
-            let _ = app_handle.emit("ptt-released", ());
-        }
-        EventType::TranscriptionModeChanged { mode } => {
-            let _ = app_handle.emit("transcription-mode-changed", mode);
-        }
-        EventType::AutoModeToggled { mode } => {
-            let _ = app_handle.emit("auto-mode-toggled", mode);
-        }
-        EventType::HistoryEntryDeleted { id } => {
-            let _ = app_handle.emit("history-entry-deleted", id);
-        }
-        EventType::Shutdown => {
-            let _ = app_handle.emit("service-shutdown", ());
+        EngineEvent::TranscriptionSegment(_) => {
+            // Not used in live dictation mode; ignore.
         }
     }
 }
 
-// ─── Tauri commands (call engine directly) ───────────────────────────────────
+// ─── Tauri commands ───────────────────────────────────────────────────────────
 
 /// List all available audio sources
 #[tauri::command]
-async fn list_all_sources() -> Result<Vec<AudioDevice>, String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::ListDevices { source_type: None })
-            .await;
-    match response {
-        Response::Devices { devices } => Ok(devices),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn list_all_sources(engine: State<'_, EngineState>) -> Result<Vec<AudioDevice>, String> {
+    let mut devices = engine.engine.list_input_devices();
+    devices.extend(engine.engine.list_system_devices());
+    Ok(devices)
 }
 
-/// Set audio sources
+/// Set audio sources and start capture
 #[tauri::command]
-async fn set_sources(source1_id: Option<String>, source2_id: Option<String>) -> Result<(), String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::SetSources {
-        source1_id,
-        source2_id,
-    })
-    .await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn set_sources(
+    source1_id: Option<String>,
+    source2_id: Option<String>,
+    engine: State<'_, EngineState>,
+) -> Result<(), String> {
+    engine.engine.start_capture(source1_id, source2_id).await
 }
 
-/// Set echo cancellation enabled/disabled
+/// Set echo cancellation enabled/disabled (persisted via config)
 #[tauri::command]
 async fn set_aec_enabled(enabled: bool) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetAecEnabled { enabled }).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    // AEC is now controlled via EngineConfig.recording_mode.
+    // For backward compatibility: enabling AEC sets EchoCancel mode; disabling sets Mixed.
+    let mut config = Config::load();
+    config.recording_mode = if enabled {
+        RecordingMode::EchoCancel
+    } else {
+        RecordingMode::Mixed
+    };
+    config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
 /// Set recording mode
 #[tauri::command]
 async fn set_recording_mode(mode: RecordingMode) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetRecordingMode { mode }).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
-}
-
-/// Local model status struct for frontend compatibility
-#[derive(serde::Serialize)]
-struct LocalModelStatus {
-    available: bool,
-    path: String,
+    let mut config = Config::load();
+    config.recording_mode = mode;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
 /// Check Whisper model status
 #[tauri::command]
-async fn check_model_status() -> Result<LocalModelStatus, String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::GetModelStatus).await;
-    match response {
-        Response::ModelStatus(status) => Ok(LocalModelStatus {
-            available: status.available,
-            path: status.path,
-        }),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn check_model_status(engine: State<'_, EngineState>) -> Result<ModelStatus, String> {
+    Ok(engine.engine.check_model_status())
 }
 
 /// Download the Whisper model
 #[tauri::command]
-async fn download_model() -> Result<(), String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::DownloadModel).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn download_model(engine: State<'_, EngineState>) -> Result<(), String> {
+    engine.engine.download_model().await
 }
 
 /// Local CUDA status struct for frontend compatibility
@@ -424,17 +332,13 @@ struct LocalCudaStatus {
 
 /// Get CUDA/GPU acceleration status
 #[tauri::command]
-async fn get_cuda_status() -> Result<LocalCudaStatus, String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::GetCudaStatus).await;
-    match response {
-        Response::CudaStatus(status) => Ok(LocalCudaStatus {
-            build_enabled: status.build_enabled,
-            runtime_available: status.runtime_available,
-            system_info: status.system_info,
-        }),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn get_cuda_status(engine: State<'_, EngineState>) -> Result<LocalCudaStatus, String> {
+    let status = engine.engine.check_gpu_status()?;
+    Ok(LocalCudaStatus {
+        build_enabled: status.cuda_available || status.metal_available,
+        runtime_available: status.cuda_available || status.metal_available,
+        system_info: status.system_info,
+    })
 }
 
 /// Status struct for frontend
@@ -451,21 +355,18 @@ struct LocalStatus {
 
 /// Get current status
 #[tauri::command]
-async fn get_status() -> Result<LocalStatus, String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::GetStatus).await;
-    match response {
-        Response::Status(status) => Ok(LocalStatus {
-            capturing: status.capturing,
-            in_speech: status.in_speech,
-            queue_depth: status.queue_depth,
-            error: status.error,
-            source1_id: status.source1_id,
-            source2_id: status.source2_id,
-            transcription_mode: status.transcription_mode,
-        }),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn get_status(engine: State<'_, EngineState>) -> Result<LocalStatus, String> {
+    let status = engine.engine.get_status();
+    let config = Config::load();
+    Ok(LocalStatus {
+        capturing: status.capturing,
+        in_speech: status.in_speech,
+        queue_depth: status.queue_depth,
+        error: status.error,
+        source1_id: status.source1_id,
+        source2_id: status.source2_id,
+        transcription_mode: config.transcription_mode,
+    })
 }
 
 /// Push-to-talk status for frontend
@@ -483,13 +384,9 @@ struct LocalPttStatus {
 /// Set the transcription mode
 #[tauri::command]
 async fn set_transcription_mode(mode: TranscriptionMode) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetTranscriptionMode { mode }).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let mut config = Config::load();
+    config.transcription_mode = mode;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
 /// Set the push-to-talk hotkey combinations
@@ -498,104 +395,78 @@ async fn set_ptt_hotkeys(
     hotkeys: Vec<HotkeyCombination>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetPushToTalkHotkeys { hotkeys })
-            .await;
-    match response {
-        Response::Ok => {
-            let _ = app_handle.emit("ptt-hotkeys-changed", ());
-            Ok(())
-        }
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let mut config = Config::load();
+    config.ptt_hotkeys = hotkeys;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    let _ = app_handle.emit("ptt-hotkeys-changed", ());
+    Ok(())
 }
 
 /// Get push-to-talk status
 #[tauri::command]
 async fn get_ptt_status() -> Result<LocalPttStatus, String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::GetPttStatus).await;
-    match response {
-        Response::PttStatus(status) => Ok(LocalPttStatus {
-            mode: status.mode,
-            hotkeys: status.hotkeys,
-            auto_toggle_hotkeys: status.auto_toggle_hotkeys,
-            auto_mode_active: status.auto_mode_active,
-            is_active: status.is_active,
-            available: status.available,
-            error: status.error,
-        }),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let config = Config::load();
+    Ok(LocalPttStatus {
+        mode: config.transcription_mode,
+        hotkeys: config.ptt_hotkeys,
+        auto_toggle_hotkeys: config.auto_toggle_hotkeys,
+        auto_mode_active: false, // auto-mode toggle is handled by hotkey module externally
+        is_active: false,
+        available: true,
+        error: None,
+    })
 }
 
 /// Set the auto-mode toggle hotkeys
 #[tauri::command]
 async fn set_auto_toggle_hotkeys(hotkeys: Vec<HotkeyCombination>) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetAutoToggleHotkeys { hotkeys })
-            .await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let mut config = Config::load();
+    config.auto_toggle_hotkeys = hotkeys;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
 /// Toggle between Automatic and PushToTalk modes
 #[tauri::command]
 async fn toggle_auto_mode() -> Result<TranscriptionMode, String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::ToggleAutoMode).await;
-    match response {
-        Response::Ok => {
-            let status_response =
-                flowstt_engine::ipc::handlers::handle_request(Request::GetPttStatus).await;
-            match status_response {
-                Response::PttStatus(status) => Ok(status.mode),
-                Response::Error { message } => Err(message),
-                _ => Err("Unexpected response".into()),
-            }
-        }
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let mut config = Config::load();
+    config.transcription_mode = match config.transcription_mode {
+        TranscriptionMode::Automatic => TranscriptionMode::PushToTalk,
+        TranscriptionMode::PushToTalk => TranscriptionMode::Automatic,
+    };
+    let new_mode = config.transcription_mode;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    Ok(new_mode)
 }
 
 /// Get all persisted configuration values
 #[tauri::command]
 async fn get_config() -> Result<ConfigValues, String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::GetConfig).await;
-    match response {
-        Response::ConfigValues(values) => Ok(values),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let config = Config::load();
+    Ok(ConfigValues {
+        transcription_mode: config.transcription_mode,
+        ptt_hotkeys: config.ptt_hotkeys,
+        auto_toggle_hotkeys: config.auto_toggle_hotkeys,
+        auto_paste_enabled: config.auto_paste_enabled,
+        auto_paste_delay_ms: config.auto_paste_delay_ms,
+        restore_clipboard_enabled: config.restore_clipboard_enabled,
+        mic_gain: config.mic_gain,
+    })
 }
 
 /// Enable or disable clipboard save/restore around transcription paste
 #[tauri::command]
 async fn set_restore_clipboard(enabled: bool) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetRestoreClipboard { enabled })
-            .await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let mut config = Config::load();
+    config.restore_clipboard_enabled = enabled;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
 /// Set the microphone input gain multiplier (1.0–4.0)
 #[tauri::command]
 async fn set_mic_gain(gain: f32) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::SetMicGain { gain }).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let mut config = Config::load();
+    config.mic_gain = gain;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
 /// History entry struct for frontend compatibility
@@ -610,32 +481,22 @@ struct LocalHistoryEntry {
 /// Get transcription history
 #[tauri::command]
 async fn get_history() -> Result<Vec<LocalHistoryEntry>, String> {
-    let response = flowstt_engine::ipc::handlers::handle_request(Request::GetHistory).await;
-    match response {
-        Response::History { entries } => Ok(entries
-            .into_iter()
-            .map(|e| LocalHistoryEntry {
-                id: e.id,
-                text: e.text,
-                timestamp: e.timestamp,
-                wav_path: e.wav_path,
-            })
-            .collect()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    let history = ipc::history::load_history()?;
+    Ok(history
+        .into_iter()
+        .map(|e| LocalHistoryEntry {
+            id: e.id,
+            text: e.text,
+            timestamp: e.timestamp,
+            wav_path: e.wav_path,
+        })
+        .collect())
 }
 
 /// Delete a history entry
 #[tauri::command]
 async fn delete_history_entry(id: String) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::DeleteHistoryEntry { id }).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+    ipc::history::delete_history_entry(&id)
 }
 
 /// Get the current theme mode from the config file.
@@ -697,30 +558,19 @@ async fn complete_setup(
     source1_id: Option<String>,
     source2_id: Option<String>,
     app_handle: AppHandle,
+    engine: State<'_, EngineState>,
 ) -> Result<(), String> {
-    let config = Config {
-        transcription_mode,
-        ptt_hotkeys: hotkeys,
-        ..Config::default_with_hotkeys()
-    };
+    let mut config = Config::default_with_hotkeys();
+    config.transcription_mode = transcription_mode;
+    config.ptt_hotkeys = hotkeys;
     config
         .save()
         .map_err(|e| format!("Failed to save config: {}", e))?;
 
-    // Configure engine with chosen sources (direct call, no IPC)
+    // Start capture with selected sources
     if source1_id.is_some() || source2_id.is_some() {
-        let _ = flowstt_engine::ipc::handlers::handle_request(Request::SetSources {
-            source1_id,
-            source2_id,
-        })
-        .await;
+        engine.engine.start_capture(source1_id, source2_id).await?;
     }
-
-    // Set transcription mode on engine
-    let _ = flowstt_engine::ipc::handlers::handle_request(Request::SetTranscriptionMode {
-        mode: transcription_mode,
-    })
-    .await;
 
     app_handle
         .emit("setup-complete", ())
@@ -731,51 +581,43 @@ async fn complete_setup(
 
 /// Start a test audio capture on a device for level metering.
 #[tauri::command]
-async fn test_audio_device(device_id: String) -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::TestAudioDevice { device_id }).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn test_audio_device(
+    device_id: String,
+    engine: State<'_, EngineState>,
+) -> Result<(), String> {
+    engine.engine.start_test_capture(device_id)
 }
 
 /// Stop any active test audio capture.
 #[tauri::command]
-async fn stop_test_audio_device() -> Result<(), String> {
-    let response =
-        flowstt_engine::ipc::handlers::handle_request(Request::StopTestAudioDevice).await;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(message),
-        _ => Err("Unexpected response".into()),
-    }
+async fn stop_test_audio_device(engine: State<'_, EngineState>) -> Result<(), String> {
+    engine.engine.stop_test_capture()
 }
 
 /// Open System Settings to the Accessibility pane on macOS.
-/// The Tauri app process itself now needs Accessibility permission (no more IPC delegation).
 #[tauri::command]
 async fn open_accessibility_settings() -> Result<(), String> {
-    // AXIsProcessTrustedWithOptions(prompt=true) shows the system dialog and adds the app
-    // to the Accessibility list in System Settings automatically - no need to open
-    // System Settings separately.
-    flowstt_engine::hotkey::request_accessibility_permission();
+    #[cfg(target_os = "macos")]
+    {
+        ipc::hotkey::request_accessibility_permission();
+    }
     Ok(())
 }
 
 /// Check whether this process has macOS Accessibility permission.
-/// Now checks directly (no IPC to separate service).
 #[tauri::command]
 async fn check_accessibility_permission() -> Result<bool, String> {
-    Ok(flowstt_engine::hotkey::check_accessibility_permission())
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(ipc::hotkey::check_accessibility_permission());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        return Ok(true);
+    }
 }
 
 /// Return the raw text of the current session's log file.
-///
-/// Finds the most recently modified `flowstt-app.*.log` file in the log
-/// directory — this is the file the rolling appender is currently writing to.
-/// Returns an empty string if no log file exists yet.
 #[tauri::command]
 fn get_log_history() -> String {
     let log_dir = flowstt_common::logging::app_log_path()
@@ -783,7 +625,6 @@ fn get_log_history() -> String {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::temp_dir().join("flowstt-logs"));
 
-    // Find the most recently modified flowstt-app.*.log file.
     let most_recent = std::fs::read_dir(&log_dir)
         .ok()
         .into_iter()
@@ -827,13 +668,11 @@ fn set_log_level(level: String, state: State<LogState>) -> Result<(), String> {
         other => return Err(format!("Unknown log level: {}", other)),
     };
 
-    // Reload the subscriber filter immediately.
     state
         .reload_handle
         .reload(EnvFilter::new(log_level.as_filter_str()))
         .map_err(|e| format!("Failed to reload log filter: {}", e))?;
 
-    // Persist to config.
     let mut config = Config::load();
     config.log_level = log_level;
     config
@@ -854,7 +693,6 @@ async fn download_logs(app_handle: AppHandle) -> Result<(), String> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::temp_dir().join("flowstt-logs"));
 
-    // Collect *.log files.
     let entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&log_dir) {
         Ok(dir) => dir
             .filter_map(|e| e.ok())
@@ -868,7 +706,6 @@ async fn download_logs(app_handle: AppHandle) -> Result<(), String> {
         return Err("no_logs".to_string());
     }
 
-    // Build zip in memory.
     let mut zip_buf = std::io::Cursor::new(Vec::<u8>::new());
     {
         let mut zip = zip::ZipWriter::new(&mut zip_buf);
@@ -890,7 +727,6 @@ async fn download_logs(app_handle: AppHandle) -> Result<(), String> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let default_name = format!("flowstt-logs-{}.zip", today);
 
-    // Show native save dialog and write the bytes.
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
     app_handle
         .dialog()
@@ -905,9 +741,7 @@ async fn download_logs(app_handle: AppHandle) -> Result<(), String> {
             std::fs::write(&dest, &zip_bytes)
                 .map_err(|e| format!("Failed to write zip: {}", e))?;
         }
-        Ok(None) => {
-            // User cancelled — not an error.
-        }
+        Ok(None) => {}
         Err(_) => return Err("Dialog channel error".to_string()),
     }
 
@@ -916,7 +750,6 @@ async fn download_logs(app_handle: AppHandle) -> Result<(), String> {
 
 // ─── App updater commands ────────────────────────────────────────────────────
 
-/// Information about an available app update, returned to the frontend.
 #[derive(serde::Serialize, Clone)]
 struct UpdateInfo {
     available: bool,
@@ -925,10 +758,6 @@ struct UpdateInfo {
     notes: Option<String>,
 }
 
-/// Check for an available app update.
-///
-/// Returns `UpdateInfo` with `available = true` and metadata if a newer version
-/// exists on the configured endpoint, or `available = false` otherwise.
 #[tauri::command]
 #[cfg(desktop)]
 async fn check_for_updates(app: AppHandle) -> Result<UpdateInfo, String> {
@@ -961,11 +790,6 @@ async fn check_for_updates(_app: AppHandle) -> Result<UpdateInfo, String> {
     })
 }
 
-/// Download and install an available app update, then relaunch.
-///
-/// Emits `update-download-progress` events with payload
-/// `{ chunkLength: number, contentLength: number | null }` during download
-/// and relaunches the app after successful installation.
 #[tauri::command]
 #[cfg(desktop)]
 async fn install_update(app: AppHandle) -> Result<(), String> {
@@ -996,8 +820,6 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    // restart() diverges (returns !) so Ok(()) is never reached;
-    // suppress with allow(unreachable_code).
     #[allow(unreachable_code)]
     {
         app.restart();
@@ -1011,13 +833,10 @@ async fn install_update(_app: AppHandle) -> Result<(), String> {
     Err("Updates not supported on this platform".to_string())
 }
 
-/// Connect events -- no-op now since events are forwarded directly from the engine
-/// via the registered EventCallback. Kept for frontend compatibility.
+/// Connect events -- no-op (events forwarded from engine broadcast loop)
 #[tauri::command]
 async fn connect_events() -> Result<(), String> {
-    // Events are now forwarded directly from the engine via TauriEventCallback.
-    // This command exists for frontend compatibility (the JS still calls it on startup).
-    debug!("[Startup] connect_events: no-op (events forwarded directly from engine)");
+    debug!("[Startup] connect_events: no-op (events forwarded from vtx-engine broadcast loop)");
     Ok(())
 }
 
@@ -1041,7 +860,6 @@ fn log_to_file(level: String, message: String) {
 
 // ─── Window helpers ──────────────────────────────────────────────────────────
 
-/// Open the log viewer window, or focus it if already open.
 pub fn open_log_viewer_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("logs") {
         let _ = window.show();
@@ -1068,25 +886,16 @@ pub fn open_log_viewer_window(app: &AppHandle) {
 pub fn run() {
     let app_t0 = Instant::now();
 
-    // Parse --headless and --test-mode flags
     let headless = std::env::args().any(|arg| arg == "--headless");
-    let test_mode = std::env::args().any(|arg| arg == "--test-mode");
+    // --test-mode flag is no longer supported (test_mode was part of flowstt-engine)
 
-    // Read config before initializing logging so we can use the configured level.
     let initial_config = Config::load();
 
-    // Initialize layered logging subscriber with reloadable filter.
     let (log_state, log_rx) = init_logging(&initial_config.log_level);
 
-    // Set test mode state before tray setup so conditional menu items are available
-    if test_mode {
-        flowstt_engine::test_mode::set_test_mode(true);
-        info!("[Startup] Test mode activated");
-    }
-
     info!(
-        "[Startup] run() entered (headless={}, test_mode={})",
-        headless, test_mode
+        "[Startup] run() entered (headless={})",
+        headless
     );
     configure_wayland_workarounds();
 
@@ -1099,13 +908,11 @@ pub fn run() {
         })
         .manage(log_state)
         .setup(move |app| {
-            // Register desktop-only plugins
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            // Spawn the log-line forwarder task: drains the mpsc channel and
-            // emits each line as a "log-line" Tauri event to all windows.
+            // Spawn the log-line forwarder task
             {
                 let app_handle = app.handle().clone();
                 let mut rx = log_rx;
@@ -1115,39 +922,75 @@ pub fn run() {
                     }
                 });
             }
+
             debug!(
                 "[Startup] setup() hook called (+{}ms from run())",
                 app_t0.elapsed().as_millis()
             );
 
+            // Set the VTX resource dir on Windows for whisper.cpp binary loading
             #[cfg(windows)]
             if let Ok(resource_dir) = app.path().resource_dir() {
-                env::set_var("FLOWSTT_RESOURCE_DIR", resource_dir);
+                env::set_var("VTX_RESOURCE_DIR", resource_dir);
             }
 
             let app_handle = app.handle().clone();
 
-            // Register event callback so engine events go directly to Tauri frontend
-            flowstt_engine::ipc::register_event_callback(TauriEventCallback {
-                app_handle: app_handle.clone(),
-            });
+            // Build vtx-engine with config from FlowSTT app config
+            let engine_config = build_engine_config(&initial_config);
+            let (engine, event_rx) = tauri::async_runtime::block_on(async {
+                EngineBuilder::from_config(engine_config).build().await
+            })
+            .map_err(|e| {
+                error!("[Startup] Failed to build engine: {}", e);
+                e
+            })?;
 
-            // Initialize the engine (audio backends, transcription, IPC server, etc.)
-            let ipc_handle = tauri::async_runtime::block_on(async { flowstt_engine::init().await });
+            let engine = Arc::new(engine);
+
+            // Register engine as managed state
+            app.manage(EngineState { engine: engine.clone() });
+
+            // Spawn the EngineEvent forwarding task
+            {
+                let app_handle_clone = app_handle.clone();
+                let mut rx = event_rx;
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                forward_engine_event(&app_handle_clone, &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("[Engine] Event receiver lagged, dropped {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                debug!("[Engine] Event broadcast channel closed");
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Initialize the IPC socket server for CLI clients
+            let ipc_handle = tauri::async_runtime::block_on(async {
+                ipc::server::start(engine.clone()).await
+            });
 
             match ipc_handle {
                 Ok(handle) => {
                     let state: State<AppState> = app.state();
                     let mut lock = tauri::async_runtime::block_on(state.ipc_server_handle.lock());
                     *lock = Some(handle);
-                    info!("[Startup] Engine initialized successfully");
+                    info!("[Startup] IPC server started");
                 }
                 Err(e) => {
-                    error!("[Startup] Failed to initialize engine: {}", e);
+                    warn!("[Startup] IPC server failed to start: {}", e);
                 }
             }
 
-            // Set up the system tray (always, including headless mode)
+            // Set up the system tray
             if let Err(e) = tray::setup_tray(app) {
                 warn!("[FlowSTT] Failed to set up system tray: {}", e);
             }
@@ -1164,8 +1007,40 @@ pub fn run() {
                 }
             }
 
-            // First-run detection: show setup wizard if no config exists
-            if Config::needs_setup() && !headless {
+            // Auto-start capture if setup is complete
+            let first_run = Config::needs_setup();
+            if !first_run {
+                let config = Config::load();
+                let engine_clone = engine.clone();
+                tauri::async_runtime::block_on(async move {
+                    let input_devices = engine_clone.list_input_devices();
+                    let source1_id = if let Some(pref) = config.preferred_source1_id.as_deref() {
+                        input_devices.iter().find(|d| d.id == pref).map(|d| d.id.clone())
+                            .or_else(|| input_devices.first().map(|d| d.id.clone()))
+                    } else {
+                        input_devices.first().map(|d| d.id.clone())
+                    };
+
+                    let source2_id = config.preferred_source2_id.as_deref().and_then(|pref| {
+                        engine_clone.list_system_devices()
+                            .into_iter()
+                            .find(|d| d.id == pref)
+                            .map(|d| d.id)
+                    });
+
+                    if let Some(s1) = source1_id {
+                        match engine_clone.start_capture(Some(s1), source2_id).await {
+                            Ok(()) => info!("[Startup] Auto-capture started"),
+                            Err(e) => error!("[Startup] Auto-capture failed: {}", e),
+                        }
+                    } else {
+                        warn!("[Startup] No audio input devices found");
+                    }
+                });
+            }
+
+            // First-run detection: show setup wizard
+            if first_run && !headless {
                 info!("[Startup] First run detected - showing setup wizard");
 
                 if let Some(main_win) = app.get_webview_window("main") {
@@ -1185,36 +1060,34 @@ pub fn run() {
                         .build()
                         .expect("Failed to create setup window");
 
-                let app_handle = app.handle().clone();
+                let app_handle_inner = app.handle().clone();
                 app.listen("setup-complete", move |_event| {
                     info!("[Startup] Setup complete - transitioning to main window");
 
-                    if let Some(setup_win) = app_handle.get_webview_window("setup") {
+                    if let Some(setup_win) = app_handle_inner.get_webview_window("setup") {
                         let _ = setup_win.destroy();
                     }
 
-                    if let Some(main_win) = app_handle.get_webview_window("main") {
+                    if let Some(main_win) = app_handle_inner.get_webview_window("main") {
                         let _ = main_win.show();
                         let _ = main_win.set_focus();
                     }
                 });
             } else if headless {
-                // Headless mode: hide the main window, tray is already set up
                 info!("[Startup] Headless mode - hiding main window");
                 if let Some(main_win) = app.get_webview_window("main") {
                     let _ = main_win.hide();
                 }
             }
 
-            // Spawn a deferred background update check (release builds only).
-            // Fires 5 seconds after startup to avoid competing with audio/library init.
+            // Deferred background update check (release builds only)
             #[cfg(all(desktop, not(debug_assertions)))]
             {
-                let app_handle = app.handle().clone();
+                let app_handle_upd = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     use tauri_plugin_updater::UpdaterExt;
-                    match app_handle.updater() {
+                    match app_handle_upd.updater() {
                         Ok(updater) => match updater.check().await {
                             Ok(Some(update)) => {
                                 info!("[Updater] Update available: v{}", update.version);
@@ -1224,18 +1097,12 @@ pub fn run() {
                                     date: update.date.map(|d| d.to_string()),
                                     notes: update.body.clone(),
                                 };
-                                let _ = app_handle.emit("update-available", payload);
+                                let _ = app_handle_upd.emit("update-available", payload);
                             }
-                            Ok(None) => {
-                                debug!("[Updater] App is up to date");
-                            }
-                            Err(e) => {
-                                warn!("[Updater] Update check failed: {}", e);
-                            }
+                            Ok(None) => debug!("[Updater] App is up to date"),
+                            Err(e) => warn!("[Updater] Update check failed: {}", e),
                         },
-                        Err(e) => {
-                            warn!("[Updater] Failed to get updater: {}", e);
-                        }
+                        Err(e) => warn!("[Updater] Failed to get updater: {}", e),
                     }
                 });
             }
@@ -1297,7 +1164,15 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 
-    // Cleanup engine on exit
-    flowstt_engine::cleanup();
     info!("FlowSTT stopped");
+}
+
+/// Build an EngineConfig from the FlowSTT AppConfig.
+fn build_engine_config(config: &Config) -> EngineConfig {
+    let mut engine_config = EngineConfig::load("FlowSTT").unwrap_or_default();
+    // Apply FlowSTT app-config overrides that affect engine behaviour
+    engine_config.transcription_mode = config.transcription_mode;
+    engine_config.recording_mode = config.recording_mode;
+    // word_break_segmentation_enabled defaults to true in EngineConfig::default()
+    engine_config
 }

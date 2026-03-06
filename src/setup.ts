@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { MiniWaveformRenderer, VisualizationPayload } from "./renderers";
 import { initTheme } from "./theme";
 
 // ---------------------------------------------------------------------------
@@ -107,9 +106,7 @@ let releaseTimer: number | null = null;
 // Accessibility permission polling
 let accessibilityPollInterval: number | null = null;
 
-// Test mini-visualizer
-let testMiniWaveformRenderer: MiniWaveformRenderer | null = null;
-let testVisualizationUnlisten: UnlistenFn | null = null;
+// Test capture state listener
 let testCaptureStateUnlisten: UnlistenFn | null = null;
 
 // ---------------------------------------------------------------------------
@@ -133,8 +130,6 @@ let hotkeyRecorder: HTMLDivElement;
 let recorderStatus: HTMLSpanElement;
 let testInstructions: HTMLParagraphElement;
 let testResult: HTMLDivElement;
-let testMiniWaveformCanvas: HTMLCanvasElement;
-let testMiniWaveformHelp: HTMLDivElement;
 let backBtn: HTMLButtonElement;
 let nextBtn: HTMLButtonElement;
 let skipLink: HTMLAnchorElement;
@@ -217,55 +212,20 @@ function showStepById(stepId: string) {
   if (stepId === "step-4") initTestStep();
 }
 
-function setTestMiniWaveformSlotActive(active: boolean) {
-  if (testMiniWaveformCanvas) {
-    testMiniWaveformCanvas.style.display = active ? "block" : "none";
-  }
-  if (testMiniWaveformHelp) {
-    testMiniWaveformHelp.style.display = active ? "none" : "flex";
-  }
-}
-
-function updateTestMiniWaveformState(capturing: boolean) {
-  if (capturing) {
-    setTestMiniWaveformSlotActive(true);
-    testMiniWaveformRenderer?.resize();
-    testMiniWaveformRenderer?.clear();
-    testMiniWaveformRenderer?.start();
-  } else {
-    testMiniWaveformRenderer?.stop();
-    testMiniWaveformRenderer?.clear();
-    setTestMiniWaveformSlotActive(false);
-  }
-}
-
-async function setupTestMiniWaveformListeners(): Promise<void> {
-  if (!testVisualizationUnlisten) {
-    testVisualizationUnlisten = await listen<VisualizationPayload>("visualization-data", (event) => {
-      if (activeSteps[currentStepIndex] !== "step-4") return;
-      testMiniWaveformRenderer?.pushSamples(event.payload.waveform);
-    });
-  }
-
+async function setupTestListeners(): Promise<void> {
   if (!testCaptureStateUnlisten) {
     testCaptureStateUnlisten = await listen<CaptureStatus>("capture-state-changed", (event) => {
       if (activeSteps[currentStepIndex] !== "step-4") return;
       if (event.payload.error) {
         console.error("[Setup] Capture error:", event.payload.error);
       }
-      updateTestMiniWaveformState(event.payload.capturing);
     });
   }
 }
 
 function teardownTestMiniWaveform() {
-  testVisualizationUnlisten?.();
-  testVisualizationUnlisten = null;
   testCaptureStateUnlisten?.();
   testCaptureStateUnlisten = null;
-  testMiniWaveformRenderer?.stop();
-  testMiniWaveformRenderer?.clear();
-  setTestMiniWaveformSlotActive(false);
 }
 
 function updateNextEnabled() {
@@ -567,14 +527,7 @@ async function initTestStep() {
   const keyNames = pttHotkey.keys.map(keyDisplayName).join(" + ");
   testInstructions.innerHTML = `Press and hold <strong>${keyNames}</strong>, then speak to verify everything works.`;
 
-  setTestMiniWaveformSlotActive(false);
-  await setupTestMiniWaveformListeners();
-  try {
-    const status = await invoke<CaptureStatus>("get_status");
-    updateTestMiniWaveformState(status.capturing);
-  } catch {
-    updateTestMiniWaveformState(false);
-  }
+  await setupTestListeners();
 
   // Stop the device test capture before starting real capture
   try {
@@ -758,8 +711,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   recorderStatus = document.getElementById("recorder-status") as HTMLSpanElement;
   testInstructions = document.getElementById("test-instructions") as HTMLParagraphElement;
   testResult = document.getElementById("test-result") as HTMLDivElement;
-  testMiniWaveformCanvas = document.getElementById("test-mini-waveform") as HTMLCanvasElement;
-  testMiniWaveformHelp = document.getElementById("test-mini-waveform-help") as HTMLDivElement;
   backBtn = document.getElementById("back-btn") as HTMLButtonElement;
   nextBtn = document.getElementById("next-btn") as HTMLButtonElement;
   skipLink = document.getElementById("skip-link") as HTMLAnchorElement;
@@ -773,14 +724,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     openAccessibilityBtn.addEventListener("click", () => {
       invoke("open_accessibility_settings").catch(() => {});
     });
-  }
-
-  if (testMiniWaveformCanvas) {
-    testMiniWaveformRenderer = new MiniWaveformRenderer(testMiniWaveformCanvas, 64);
-  }
-
-  if (testMiniWaveformHelp) {
-    testMiniWaveformHelp.textContent = "Waiting for audio...";
   }
 
   // Close button - exits the entire application since setup is incomplete
@@ -813,9 +756,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   window.addEventListener("resize", () => {
-    if (activeSteps[currentStepIndex] === "step-4") {
-      testMiniWaveformRenderer?.resize();
-    }
+    // No waveform renderer to resize
   });
 
   // Connect to service event stream

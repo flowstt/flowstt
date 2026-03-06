@@ -53,11 +53,17 @@ pub fn setup_tray(_app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Shut down the engine directly (in-process).
-/// Used by the tray Exit handler to stop the engine before exiting the app.
+/// Clean up IPC socket file on Unix before exiting.
 fn shutdown_engine() {
-    flowstt_engine::request_shutdown();
-    flowstt_engine::cleanup();
+    // The AudioEngine shuts down via Drop when the Tauri managed state is released.
+    // On Unix, we clean up the socket file here for CLI clients.
+    #[cfg(unix)]
+    {
+        let socket_path = flowstt_common::ipc::get_socket_path();
+        if socket_path.exists() {
+            let _ = std::fs::remove_file(&socket_path);
+        }
+    }
 }
 
 /// Update the tray icon to reflect the current recording state.

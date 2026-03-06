@@ -10,7 +10,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use crate::types::{HotkeyCombination, KeyCode, TranscriptionMode};
+use vtx_common::{HotkeyCombination, KeyCode, RecordingMode, TranscriptionMode};
 
 /// Theme mode for the application UI.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -86,6 +86,9 @@ pub struct Config {
     /// Microphone input gain multiplier applied before VAD and transcription (1.0–4.0, default 1.0)
     #[serde(default = "default_mic_gain")]
     pub mic_gain: f32,
+    /// Recording mode: Mixed combines both streams; EchoCancel outputs only echo-cancelled primary
+    #[serde(default)]
+    pub recording_mode: RecordingMode,
 }
 
 fn default_auto_toggle_hotkeys() -> Vec<HotkeyCombination> {
@@ -224,6 +227,7 @@ impl Config {
             log_level: LogLevel::default(),
             restore_clipboard_enabled: true,
             mic_gain: 1.0,
+            recording_mode: RecordingMode::default(),
         }
     }
 
@@ -274,6 +278,7 @@ impl Config {
             log_level: legacy.log_level.unwrap_or_default(),
             restore_clipboard_enabled: legacy.restore_clipboard_enabled.unwrap_or(true),
             mic_gain: legacy.mic_gain.unwrap_or(1.0),
+            recording_mode: RecordingMode::default(),
         }
     }
 }

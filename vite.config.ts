@@ -10,7 +10,6 @@ export default defineConfig(async () => ({
     rollupOptions: {
       input: {
         main: "index.html",
-        visualization: "visualization.html",
         about: "about.html",
         config: "config.html",
         setup: "setup.html",
