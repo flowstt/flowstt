@@ -5,7 +5,25 @@
 //! Only types unique to FlowSTT's IPC protocol and app layer are defined here.
 
 use serde::{Deserialize, Serialize};
-use vtx_common::{HotkeyCombination, TranscriptionMode};
+use vtx_common::HotkeyCombination;
+
+/// Transcription mode — an app-level concept that determines how FlowSTT
+/// decides when to record audio for transcription.
+///
+/// vtx-engine itself has no notion of transcription modes. It provides:
+/// - **VAD (automatic)**: continuously detects speech and transcribes segments
+/// - **Manual recording**: `start_recording()` / `stop_recording()` API
+///
+/// FlowSTT maps this enum to the appropriate engine API calls.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionMode {
+    /// VAD-triggered — speech detection determines segment boundaries
+    #[default]
+    Automatic,
+    /// Push-to-Talk — user holds a hotkey to record, audio is transcribed on release
+    PushToTalk,
+}
 
 // Re-export from vtx-common so internal modules can use crate-internal types
 pub use vtx_common::{
@@ -36,7 +54,7 @@ impl RuntimeMode {
 /// Persisted configuration values returned by the GetConfig IPC request.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ConfigValues {
-    /// Current transcription mode (Automatic or PushToTalk)
+    /// Current transcription mode (Automatic or PushToTalk) — app-level concept
     pub transcription_mode: TranscriptionMode,
     /// Configured push-to-talk hotkey combinations
     pub ptt_hotkeys: Vec<HotkeyCombination>,
@@ -55,6 +73,12 @@ pub struct ConfigValues {
     /// Microphone input gain multiplier (1.0–4.0, default 1.0)
     #[serde(default = "default_mic_gain")]
     pub mic_gain: f32,
+    /// Preferred primary audio input device ID
+    #[serde(default)]
+    pub preferred_source1_id: Option<String>,
+    /// Preferred reference (system) audio device ID
+    #[serde(default)]
+    pub preferred_source2_id: Option<String>,
 }
 
 fn default_auto_paste_enabled() -> bool {

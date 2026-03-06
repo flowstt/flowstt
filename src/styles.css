@@ -148,6 +148,7 @@ img {
   line-height: 1;
   vertical-align: middle;
   flex-shrink: 0;
+  margin-right: 0.35rem;
 }
 
 /* Mini waveform in header - hidden by default, shown when capturing */

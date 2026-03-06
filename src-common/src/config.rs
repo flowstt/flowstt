@@ -10,7 +10,9 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use vtx_common::{HotkeyCombination, KeyCode, RecordingMode, TranscriptionMode};
+use vtx_common::{HotkeyCombination, KeyCode, RecordingMode};
+
+use crate::types::TranscriptionMode;
 
 /// Theme mode for the application UI.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -19,9 +19,14 @@ pub use config::ThemeMode;
 // Re-export shared audio/transcription types from vtx-common.
 // These replace the duplicate definitions previously in flowstt-common.
 pub use vtx_common::{
-    AudioDevice, AudioSourceType, HotkeyCombination, KeyCode, RecordingMode, TranscriptionMode,
+    AudioDevice, AudioSourceType, HotkeyCombination, KeyCode, RecordingMode,
     TranscriptionResult, ModelStatus, HistoryEntry,
 };
+
+// FlowSTT-specific transcription mode. This is an app-level concept:
+// vtx-engine offers VAD (automatic) and manual recording APIs; FlowSTT
+// decides which to use based on this setting.
+pub use types::TranscriptionMode;
 
 // FlowSTT-specific types still defined locally
 pub use types::{

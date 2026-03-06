@@ -38,6 +38,7 @@ vtx-common = "0.1.0"
 flowstt-common = { path = "../src-common" }
 
 tauri-plugin-dialog = "2"
+uuid = { version = "1.22.0", features = ["v4"] }
 
 # Desktop-only plugins
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -49,6 +50,7 @@ tauri-plugin-process = "2"
 tokio = { version = "1", features = ["net"] }
 windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input",
     "Win32_Foundation",
     "Win32_System_Pipes",
     "Win32_Security",
@@ -57,3 +59,4 @@ windows = { version = "0.61", features = [
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+rdev = "0.5.3"

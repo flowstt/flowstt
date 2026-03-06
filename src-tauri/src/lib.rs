@@ -4,15 +4,17 @@
 //! Tauri commands call AudioEngine methods directly.
 //! The IPC socket server is hosted by this process for CLI client access.
 
-mod tray;
+mod hotkey;
 mod ipc;
+mod tray;
 
 use flowstt_common::config::{Config, LogLevel, ThemeMode};
 use flowstt_common::{
     runtime_mode, ConfigValues, HotkeyCombination, RecordingMode, RuntimeMode, TranscriptionMode,
 };
-use vtx_common::{AudioDevice, EngineEvent, ModelStatus};
-use vtx_engine::{AudioEngine, EngineBuilder, EngineConfig};
+// TranscriptionMode is now defined in flowstt_common, not vtx_common
+use vtx_common::{AudioDevice, EngineEvent, HistoryEntry, ModelStatus};
+use vtx_engine::{AudioEngine, EngineBuilder, EngineConfig, TranscriptionHistory};
 use std::env;
 use std::sync::Arc;
 use std::time::Instant;
@@ -184,22 +186,49 @@ struct EngineState {
     engine: Arc<AudioEngine>,
 }
 
-/// IPC server handle and PTT controller state.
+/// IPC server handle and hotkey listener state.
 struct AppState {
     ipc_server_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    hotkey_listener: Mutex<Option<hotkey::HotkeyListener>>,
+    /// Current transcription mode — used to decide how tray icon reflects state.
+    transcription_mode: Mutex<TranscriptionMode>,
 }
 
 // ─── Forward EngineEvents to Tauri frontend ───────────────────────────────────
 
 /// Forward an engine event to the Tauri frontend.
 /// VisualizationData events are discarded (no visualization window).
-fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent) {
+fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent, is_ptt_mode: bool) {
     match event {
-        EngineEvent::VisualizationData(_) => {
-            // Visualization window removed — discard silently.
+        EngineEvent::VisualizationData(data) => {
+            let _ = app_handle.emit("visualization-data", data);
         }
         EngineEvent::TranscriptionComplete(result) => {
-            let _ = app_handle.emit("transcription-complete", result);
+            // vtx-engine emits results without id/timestamp — enrich them
+            // here so the frontend and history store have complete records.
+            let id = uuid::Uuid::new_v4().to_string();
+            let timestamp = chrono::Utc::now().to_rfc3339();
+
+            let enriched = vtx_common::TranscriptionResult {
+                id: Some(id.clone()),
+                text: result.text.clone(),
+                timestamp: Some(timestamp.clone()),
+                duration_ms: result.duration_ms,
+                audio_path: result.audio_path.clone(),
+                timestamp_offset_ms: result.timestamp_offset_ms,
+            };
+
+            // Persist to history
+            if let Ok(mut history) = TranscriptionHistory::open("FlowSTT", 500) {
+                history.append(HistoryEntry {
+                    id: id.clone(),
+                    text: result.text.clone(),
+                    timestamp: timestamp.clone(),
+                    wav_path: result.audio_path.clone(),
+                });
+            }
+
+            let _ = app_handle.emit("transcription-complete", &enriched);
 
             // On Windows, WebView2 can enter a frozen rendering state when
             // Alt (the default PTT key) is released while the window is focused.
@@ -240,7 +269,11 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent) {
                     error: error.clone(),
                 },
             );
-            tray::update_tray_icon(app_handle, *capturing);
+            // In automatic mode, the tray icon reflects capture state (active = transcribing).
+            // In PTT mode, the tray icon is driven by RecordingStarted/RecordingStopped instead.
+            if !is_ptt_mode {
+                tray::update_tray_icon(app_handle, *capturing);
+            }
         }
         EngineEvent::ModelDownloadProgress { percent } => {
             let _ = app_handle.emit("model-download-progress", percent);
@@ -265,6 +298,18 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent) {
         EngineEvent::TranscriptionSegment(_) => {
             // Not used in live dictation mode; ignore.
         }
+        EngineEvent::RecordingStarted => {
+            let _ = app_handle.emit("recording-started", ());
+            if is_ptt_mode {
+                tray::update_tray_icon(app_handle, true);
+            }
+        }
+        EngineEvent::RecordingStopped { duration_ms } => {
+            let _ = app_handle.emit("recording-stopped", duration_ms);
+            if is_ptt_mode {
+                tray::update_tray_icon(app_handle, false);
+            }
+        }
     }
 }
 
@@ -278,13 +323,21 @@ async fn list_all_sources(engine: State<'_, EngineState>) -> Result<Vec<AudioDev
     Ok(devices)
 }
 
-/// Set audio sources and start capture
+/// Set audio sources and start capture (persists selection to config)
 #[tauri::command]
 async fn set_sources(
     source1_id: Option<String>,
     source2_id: Option<String>,
     engine: State<'_, EngineState>,
 ) -> Result<(), String> {
+    // Persist the selected device IDs so they survive restart
+    let mut config = Config::load();
+    config.preferred_source1_id = source1_id.clone();
+    config.preferred_source2_id = source2_id.clone();
+    config
+        .save()
+        .map_err(|e| format!("Failed to save config: {}", e))?;
+
     engine.engine.start_capture(source1_id, source2_id).await
 }
 
@@ -381,12 +434,19 @@ struct LocalPttStatus {
     error: Option<String>,
 }
 
-/// Set the transcription mode
+/// Set the transcription mode and start/stop the hotkey listener accordingly.
 #[tauri::command]
-async fn set_transcription_mode(mode: TranscriptionMode) -> Result<(), String> {
+async fn set_transcription_mode(
+    mode: TranscriptionMode,
+    app_handle: AppHandle,
+    engine: State<'_, EngineState>,
+    app_state: State<'_, AppState>,
+) -> Result<(), String> {
     let mut config = Config::load();
     config.transcription_mode = mode;
-    config.save().map_err(|e| format!("Failed to save config: {}", e))
+    config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    apply_transcription_mode(mode, &engine.engine, &app_state, &config.ptt_hotkeys, Some(&app_handle)).await;
+    Ok(())
 }
 
 /// Set the push-to-talk hotkey combinations
@@ -394,24 +454,29 @@ async fn set_transcription_mode(mode: TranscriptionMode) -> Result<(), String> {
 async fn set_ptt_hotkeys(
     hotkeys: Vec<HotkeyCombination>,
     app_handle: AppHandle,
+    app_state: State<'_, AppState>,
 ) -> Result<(), String> {
     let mut config = Config::load();
-    config.ptt_hotkeys = hotkeys;
+    config.ptt_hotkeys = hotkeys.clone();
     config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    // Update the running listener if one exists
+    if let Some(ref listener) = *app_state.hotkey_listener.lock().await {
+        listener.update_combos(hotkeys);
+    }
     let _ = app_handle.emit("ptt-hotkeys-changed", ());
     Ok(())
 }
 
 /// Get push-to-talk status
 #[tauri::command]
-async fn get_ptt_status() -> Result<LocalPttStatus, String> {
+async fn get_ptt_status(engine: State<'_, EngineState>) -> Result<LocalPttStatus, String> {
     let config = Config::load();
     Ok(LocalPttStatus {
         mode: config.transcription_mode,
         hotkeys: config.ptt_hotkeys,
         auto_toggle_hotkeys: config.auto_toggle_hotkeys,
-        auto_mode_active: false, // auto-mode toggle is handled by hotkey module externally
-        is_active: false,
+        auto_mode_active: false,
+        is_active: engine.engine.is_recording(),
         available: true,
         error: None,
     })
@@ -427,7 +492,11 @@ async fn set_auto_toggle_hotkeys(hotkeys: Vec<HotkeyCombination>) -> Result<(), 
 
 /// Toggle between Automatic and PushToTalk modes
 #[tauri::command]
-async fn toggle_auto_mode() -> Result<TranscriptionMode, String> {
+async fn toggle_auto_mode(
+    app_handle: AppHandle,
+    engine: State<'_, EngineState>,
+    app_state: State<'_, AppState>,
+) -> Result<TranscriptionMode, String> {
     let mut config = Config::load();
     config.transcription_mode = match config.transcription_mode {
         TranscriptionMode::Automatic => TranscriptionMode::PushToTalk,
@@ -435,7 +504,65 @@ async fn toggle_auto_mode() -> Result<TranscriptionMode, String> {
     };
     let new_mode = config.transcription_mode;
     config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    apply_transcription_mode(new_mode, &engine.engine, &app_state, &config.ptt_hotkeys, Some(&app_handle)).await;
     Ok(new_mode)
+}
+
+/// Apply a transcription mode change: start/stop the hotkey listener and
+/// enable/disable VAD-driven transcription as appropriate.
+async fn apply_transcription_mode(
+    mode: TranscriptionMode,
+    engine: &Arc<AudioEngine>,
+    app_state: &AppState,
+    ptt_hotkeys: &[HotkeyCombination],
+    app_handle: Option<&AppHandle>,
+) {
+    // Update the shared mode so the event-forwarder task can read it.
+    {
+        let mut mode_lock = app_state.transcription_mode.lock().await;
+        *mode_lock = mode;
+    }
+
+    let mut listener_lock = app_state.hotkey_listener.lock().await;
+    match mode {
+        TranscriptionMode::PushToTalk => {
+            // Stop any in-progress recording, disable VAD transcription
+            engine.stop_recording();
+            engine.set_transcription_enabled(false);
+
+            // Reset tray icon to non-recording since PTT is not being held
+            if let Some(ah) = app_handle {
+                tray::update_tray_icon(ah, false);
+            }
+
+            // Start hotkey listener if not already running
+            if listener_lock.is_none() {
+                let listener = hotkey::HotkeyListener::start(
+                    engine.clone(),
+                    ptt_hotkeys.to_vec(),
+                );
+                *listener_lock = Some(listener);
+                info!("[Mode] Switched to PTT — hotkey listener started");
+            } else {
+                info!("[Mode] Switched to PTT — hotkey listener already running");
+            }
+        }
+        TranscriptionMode::Automatic => {
+            // Stop hotkey listener and any in-progress manual recording
+            if let Some(listener) = listener_lock.take() {
+                listener.stop();
+            }
+            engine.stop_recording();
+            engine.set_transcription_enabled(true);
+
+            // Tray icon reflects capture state in automatic mode
+            if let Some(ah) = app_handle {
+                tray::update_tray_icon(ah, engine.is_capturing());
+            }
+
+            info!("[Mode] Switched to Automatic — VAD transcription enabled");
+        }
+    }
 }
 
 /// Get all persisted configuration values
@@ -450,6 +577,8 @@ async fn get_config() -> Result<ConfigValues, String> {
         auto_paste_delay_ms: config.auto_paste_delay_ms,
         restore_clipboard_enabled: config.restore_clipboard_enabled,
         mic_gain: config.mic_gain,
+        preferred_source1_id: config.preferred_source1_id,
+        preferred_source2_id: config.preferred_source2_id,
     })
 }
 
@@ -559,10 +688,13 @@ async fn complete_setup(
     source2_id: Option<String>,
     app_handle: AppHandle,
     engine: State<'_, EngineState>,
+    app_state: State<'_, AppState>,
 ) -> Result<(), String> {
     let mut config = Config::default_with_hotkeys();
     config.transcription_mode = transcription_mode;
-    config.ptt_hotkeys = hotkeys;
+    config.ptt_hotkeys = hotkeys.clone();
+    config.preferred_source1_id = source1_id.clone();
+    config.preferred_source2_id = source2_id.clone();
     config
         .save()
         .map_err(|e| format!("Failed to save config: {}", e))?;
@@ -572,11 +704,45 @@ async fn complete_setup(
         engine.engine.start_capture(source1_id, source2_id).await?;
     }
 
+    // Apply transcription mode (starts hotkey listener for PTT, enables VAD
+    // transcription for automatic)
+    apply_transcription_mode(
+        transcription_mode,
+        &engine.engine,
+        &app_state,
+        &hotkeys,
+        Some(&app_handle),
+    )
+    .await;
+
     app_handle
         .emit("setup-complete", ())
         .map_err(|e| format!("Failed to emit event: {}", e))?;
 
     Ok(())
+}
+
+/// Start a manual recording session (for push-to-talk).
+///
+/// Audio is accumulated until `stop_recording` is called, then submitted
+/// for transcription.
+#[tauri::command]
+async fn start_recording(engine: State<'_, EngineState>) -> Result<(), String> {
+    engine.engine.start_recording();
+    Ok(())
+}
+
+/// Stop the manual recording session and submit audio for transcription.
+#[tauri::command]
+async fn stop_recording(engine: State<'_, EngineState>) -> Result<(), String> {
+    engine.engine.stop_recording();
+    Ok(())
+}
+
+/// Check if a manual recording session is active.
+#[tauri::command]
+async fn is_recording(engine: State<'_, EngineState>) -> Result<bool, String> {
+    Ok(engine.engine.is_recording())
 }
 
 /// Start a test audio capture on a device for level metering.
@@ -905,6 +1071,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(AppState {
             ipc_server_handle: Mutex::new(None),
+            hotkey_listener: Mutex::new(None),
+            transcription_mode: Mutex::new(initial_config.transcription_mode),
         })
         .manage(log_state)
         .setup(move |app| {
@@ -936,10 +1104,18 @@ pub fn run() {
 
             let app_handle = app.handle().clone();
 
+            // Migrate whisper model from legacy location if needed.
+            // Pre-vtx-engine builds stored the model at {cache}/whisper/;
+            // vtx-engine uses {cache}/FlowSTT/whisper/.
+            migrate_whisper_model();
+
             // Build vtx-engine with config from FlowSTT app config
             let engine_config = build_engine_config(&initial_config);
             let (engine, event_rx) = tauri::async_runtime::block_on(async {
-                EngineBuilder::from_config(engine_config).build().await
+                EngineBuilder::from_config(engine_config)
+                    .app_name("FlowSTT")
+                    .build()
+                    .await
             })
             .map_err(|e| {
                 error!("[Startup] Failed to build engine: {}", e);
@@ -955,11 +1131,22 @@ pub fn run() {
             {
                 let app_handle_clone = app_handle.clone();
                 let mut rx = event_rx;
+                let initial_is_ptt = initial_config.transcription_mode == TranscriptionMode::PushToTalk;
                 tauri::async_runtime::spawn(async move {
                     loop {
                         match rx.recv().await {
                             Ok(event) => {
-                                forward_engine_event(&app_handle_clone, &event);
+                                // Read the current mode from AppState (may change at runtime).
+                                let is_ptt = app_handle_clone
+                                    .try_state::<AppState>()
+                                    .map(|s| {
+                                        s.transcription_mode
+                                            .try_lock()
+                                            .map(|m| *m == TranscriptionMode::PushToTalk)
+                                            .unwrap_or(initial_is_ptt)
+                                    })
+                                    .unwrap_or(initial_is_ptt);
+                                forward_engine_event(&app_handle_clone, &event, is_ptt);
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                                 warn!("[Engine] Event receiver lagged, dropped {} events", n);
@@ -1012,11 +1199,29 @@ pub fn run() {
             if !first_run {
                 let config = Config::load();
                 let engine_clone = engine.clone();
+
+                // In PTT mode, disable VAD-driven transcription so speech
+                // detection does not auto-submit segments.  Recording is
+                // exclusively driven by the global hotkey listener below.
+                let is_ptt = config.transcription_mode == TranscriptionMode::PushToTalk;
+                if is_ptt {
+                    engine_clone.set_transcription_enabled(false);
+                    info!("[Startup] PTT mode — VAD transcription disabled");
+                }
+
                 tauri::async_runtime::block_on(async move {
                     let input_devices = engine_clone.list_input_devices();
+                    info!(
+                        "[Startup] {} input device(s) available, preferred_source1_id={:?}",
+                        input_devices.len(),
+                        config.preferred_source1_id,
+                    );
                     let source1_id = if let Some(pref) = config.preferred_source1_id.as_deref() {
                         input_devices.iter().find(|d| d.id == pref).map(|d| d.id.clone())
-                            .or_else(|| input_devices.first().map(|d| d.id.clone()))
+                            .or_else(|| {
+                                warn!("[Startup] Preferred source1 '{}' not found, falling back", pref);
+                                input_devices.first().map(|d| d.id.clone())
+                            })
                     } else {
                         input_devices.first().map(|d| d.id.clone())
                     };
@@ -1028,15 +1233,28 @@ pub fn run() {
                             .map(|d| d.id)
                     });
 
-                    if let Some(s1) = source1_id {
-                        match engine_clone.start_capture(Some(s1), source2_id).await {
-                            Ok(()) => info!("[Startup] Auto-capture started"),
+                    if let Some(ref s1) = source1_id {
+                        info!("[Startup] Starting capture with source1={}, source2={:?}", s1, source2_id);
+                        match engine_clone.start_capture(source1_id, source2_id).await {
+                            Ok(()) => info!("[Startup] Auto-capture started successfully"),
                             Err(e) => error!("[Startup] Auto-capture failed: {}", e),
                         }
                     } else {
-                        warn!("[Startup] No audio input devices found");
+                        warn!("[Startup] No audio input devices found — PTT will not work");
                     }
                 });
+
+                // Start global hotkey listener for PTT
+                if is_ptt {
+                    let listener = hotkey::HotkeyListener::start(
+                        engine.clone(),
+                        config.ptt_hotkeys.clone(),
+                    );
+                    let app_state: State<AppState> = app.state();
+                    *tauri::async_runtime::block_on(app_state.hotkey_listener.lock()) =
+                        Some(listener);
+                    info!("[Startup] PTT hotkey listener started");
+                }
             }
 
             // First-run detection: show setup wizard
@@ -1145,6 +1363,9 @@ pub fn run() {
             get_config,
             set_restore_clipboard,
             set_mic_gain,
+            start_recording,
+            stop_recording,
+            is_recording,
             get_history,
             delete_history_entry,
             connect_events,
@@ -1167,11 +1388,46 @@ pub fn run() {
     info!("FlowSTT stopped");
 }
 
+/// Migrate the whisper model from the legacy location to the new app-scoped
+/// location if the model exists at the old path but not the new one.
+///
+/// Legacy path:  `{cache_dir}/whisper/ggml-base.en.bin`
+/// New path:     `{cache_dir}/FlowSTT/whisper/ggml-base.en.bin`
+fn migrate_whisper_model() {
+    let Some(base) = directories::BaseDirs::new().map(|d| d.cache_dir().to_path_buf()) else {
+        return;
+    };
+
+    let model_name = "ggml-base.en.bin";
+    let legacy_path = base.join("whisper").join(model_name);
+    let new_dir = base.join("FlowSTT").join("whisper");
+    let new_path = new_dir.join(model_name);
+
+    if new_path.exists() || !legacy_path.exists() {
+        return;
+    }
+
+    info!(
+        "[Migration] Copying whisper model from {} to {}",
+        legacy_path.display(),
+        new_path.display()
+    );
+
+    if let Err(e) = std::fs::create_dir_all(&new_dir) {
+        warn!("[Migration] Failed to create directory {}: {}", new_dir.display(), e);
+        return;
+    }
+
+    match std::fs::copy(&legacy_path, &new_path) {
+        Ok(bytes) => info!("[Migration] Model copied successfully ({} bytes)", bytes),
+        Err(e) => warn!("[Migration] Failed to copy model: {}", e),
+    }
+}
+
 /// Build an EngineConfig from the FlowSTT AppConfig.
 fn build_engine_config(config: &Config) -> EngineConfig {
     let mut engine_config = EngineConfig::load("FlowSTT").unwrap_or_default();
     // Apply FlowSTT app-config overrides that affect engine behaviour
-    engine_config.transcription_mode = config.transcription_mode;
     engine_config.recording_mode = config.recording_mode;
     // word_break_segmentation_enabled defaults to true in EngineConfig::default()
     engine_config

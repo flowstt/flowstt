@@ -224,6 +224,8 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
                 auto_paste_delay_ms: config.auto_paste_delay_ms,
                 restore_clipboard_enabled: config.restore_clipboard_enabled,
                 mic_gain: config.mic_gain,
+                preferred_source1_id: config.preferred_source1_id,
+                preferred_source2_id: config.preferred_source2_id,
             })
         }
 
@@ -279,8 +281,8 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
         Request::ToggleAutoMode => {
             let mut config = Config::load();
             config.transcription_mode = match config.transcription_mode {
-                vtx_common::TranscriptionMode::Automatic => vtx_common::TranscriptionMode::PushToTalk,
-                vtx_common::TranscriptionMode::PushToTalk => vtx_common::TranscriptionMode::Automatic,
+                flowstt_common::TranscriptionMode::Automatic => flowstt_common::TranscriptionMode::PushToTalk,
+                flowstt_common::TranscriptionMode::PushToTalk => flowstt_common::TranscriptionMode::Automatic,
             };
             match config.save() {
                 Ok(()) => Response::Ok,

@@ -4,6 +4,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { initTheme, getResolvedTheme, onThemeChange } from "./theme";
+import { MiniWaveformRenderer } from "./renderers";
 
 import logoLight from "./assets/flowstt-landscape-light.svg";
 import logoDark from "./assets/flowstt-landscape.svg";
@@ -41,6 +42,69 @@ interface CaptureStatus {
 // Transcription mode matching backend
 type TranscriptionMode = "automatic" | "push_to_talk";
 
+interface HotkeyCombination {
+  keys: string[];
+}
+
+interface PttStatus {
+  mode: TranscriptionMode;
+  hotkeys: HotkeyCombination[];
+}
+
+const KEY_DISPLAY_NAMES: Record<string, string> = {
+  right_alt: "Right Alt",
+  left_alt: "Left Alt",
+  right_control: "Right Ctrl",
+  left_control: "Left Ctrl",
+  right_shift: "Right Shift",
+  left_shift: "Left Shift",
+  caps_lock: "Caps Lock",
+  left_meta: "Left Win",
+  right_meta: "Right Win",
+  f1: "F1", f2: "F2", f3: "F3", f4: "F4", f5: "F5", f6: "F6",
+  f7: "F7", f8: "F8", f9: "F9", f10: "F10", f11: "F11", f12: "F12",
+  f13: "F13", f14: "F14", f15: "F15", f16: "F16", f17: "F17", f18: "F18",
+  f19: "F19", f20: "F20", f21: "F21", f22: "F22", f23: "F23", f24: "F24",
+  key_a: "A", key_b: "B", key_c: "C", key_d: "D", key_e: "E",
+  key_f: "F", key_g: "G", key_h: "H", key_i: "I", key_j: "J",
+  key_k: "K", key_l: "L", key_m: "M", key_n: "N", key_o: "O",
+  key_p: "P", key_q: "Q", key_r: "R", key_s: "S", key_t: "T",
+  key_u: "U", key_v: "V", key_w: "W", key_x: "X", key_y: "Y", key_z: "Z",
+  digit0: "0", digit1: "1", digit2: "2", digit3: "3", digit4: "4",
+  digit5: "5", digit6: "6", digit7: "7", digit8: "8", digit9: "9",
+  arrow_up: "Up", arrow_down: "Down", arrow_left: "Left", arrow_right: "Right",
+  home: "Home", end: "End", page_up: "Page Up", page_down: "Page Down",
+  insert: "Insert", delete: "Delete",
+  escape: "Esc", tab: "Tab", space: "Space", enter: "Enter",
+  backspace: "Backspace", print_screen: "Print Screen",
+  scroll_lock: "Scroll Lock", pause: "Pause",
+  minus: "-", equal: "=", bracket_left: "[", bracket_right: "]",
+  backslash: "\\", semicolon: ";", quote: "'", backquote: "`",
+  comma: ",", period: ".", slash: "/",
+  numpad0: "Num 0", numpad1: "Num 1", numpad2: "Num 2", numpad3: "Num 3",
+  numpad4: "Num 4", numpad5: "Num 5", numpad6: "Num 6", numpad7: "Num 7",
+  numpad8: "Num 8", numpad9: "Num 9",
+  numpad_multiply: "Num *", numpad_add: "Num +", numpad_subtract: "Num -",
+  numpad_decimal: "Num .", numpad_divide: "Num /", num_lock: "Num Lock",
+};
+
+const MODIFIER_KEYS = new Set([
+  "right_alt", "left_alt", "right_control", "left_control",
+  "right_shift", "left_shift", "left_meta", "right_meta",
+]);
+
+function keyDisplayName(keyCode: string): string {
+  return KEY_DISPLAY_NAMES[keyCode] || keyCode;
+}
+
+function combinationDisplayName(combo: HotkeyCombination): string {
+  const modifiers = combo.keys.filter((k) => MODIFIER_KEYS.has(k));
+  const others = combo.keys.filter((k) => !MODIFIER_KEYS.has(k));
+  modifiers.sort();
+  others.sort();
+  return [...modifiers, ...others].map(keyDisplayName).join(" + ");
+}
+
 // History entry from the service
 interface HistoryEntry {
   id: string;
@@ -57,20 +121,59 @@ interface TranscriptionCompletePayload {
   audio_path: string | null;
 }
 
+interface VisualizationPayload {
+  waveform: number[];
+}
+
 // DOM elements
 let historyContainer: HTMLElement | null;
 let modelWarning: HTMLElement | null;
 let modelPathEl: HTMLElement | null;
 let downloadModelBtn: HTMLButtonElement | null;
 let downloadStatusEl: HTMLElement | null;
+let miniWaveformCanvas: HTMLCanvasElement | null;
+let miniWaveformHelp: HTMLDivElement | null;
+let miniWaveformRenderer: MiniWaveformRenderer | null = null;
 let closeBtn: HTMLButtonElement | null;
 
 // Event listeners
 let transcriptionCompleteUnlisten: UnlistenFn | null = null;
 let captureStateChangedUnlisten: UnlistenFn | null = null;
+let recordingStartedUnlisten: UnlistenFn | null = null;
+let recordingStoppedUnlisten: UnlistenFn | null = null;
+let visualizationDataUnlisten: UnlistenFn | null = null;
 let historyEntryDeletedUnlisten: UnlistenFn | null = null;
 let autoModeToggledUnlisten: UnlistenFn | null = null;
 let pttHotkeysChangedUnlisten: UnlistenFn | null = null;
+
+/** Toggle visibility between the mini waveform canvas and the hotkey help text. */
+function setMiniWaveformSlotActive(active: boolean) {
+  if (miniWaveformCanvas) {
+    miniWaveformCanvas.style.display = active ? "block" : "none";
+  }
+  if (miniWaveformHelp) {
+    miniWaveformHelp.style.display = active ? "none" : "flex";
+  }
+}
+
+async function refreshHotkeyHelpText(): Promise<void> {
+  if (!miniWaveformHelp) return;
+  try {
+    const status = await invoke<PttStatus>("get_ptt_status");
+    if (status.mode === "push_to_talk") {
+      const combo = status.hotkeys?.[0] || null;
+      const label = combo ? combinationDisplayName(combo) : null;
+      const text = label || "Unassigned";
+      miniWaveformHelp.textContent = text;
+      miniWaveformHelp.title = text;
+      miniWaveformHelp.style.display = "flex";
+    } else {
+      miniWaveformHelp.style.display = "none";
+    }
+  } catch (error) {
+    console.error("Failed to load PTT status:", error);
+  }
+}
 
 async function checkModelStatus() {
   try {
@@ -133,9 +236,43 @@ async function setupEventListeners() {
     captureStateChangedUnlisten = await listen<{capturing: boolean, error: string | null}>(
       "capture-state-changed",
       (event) => {
-
         if (event.payload.error) {
           console.error("[Capture] Error:", event.payload.error);
+        }
+      }
+    );
+  }
+
+  // Recording started (PTT mode) — show mini waveform
+  if (!recordingStartedUnlisten) {
+    recordingStartedUnlisten = await listen("recording-started", () => {
+      setMiniWaveformSlotActive(true);
+      if (miniWaveformRenderer) {
+        miniWaveformRenderer.resize();
+        miniWaveformRenderer.clear();
+        miniWaveformRenderer.start();
+      }
+    });
+  }
+
+  // Recording stopped (PTT mode) — hide mini waveform
+  if (!recordingStoppedUnlisten) {
+    recordingStoppedUnlisten = await listen("recording-stopped", () => {
+      if (miniWaveformRenderer) {
+        miniWaveformRenderer.stop();
+        miniWaveformRenderer.clear();
+      }
+      setMiniWaveformSlotActive(false);
+    });
+  }
+
+  // Visualization data — feed waveform samples to mini renderer
+  if (!visualizationDataUnlisten) {
+    visualizationDataUnlisten = await listen<VisualizationPayload>(
+      "visualization-data",
+      (event) => {
+        if (miniWaveformRenderer && event.payload.waveform) {
+          miniWaveformRenderer.pushSamples(event.payload.waveform);
         }
       }
     );
@@ -159,7 +296,7 @@ async function setupEventListeners() {
   // PTT hotkeys changed
   if (!pttHotkeysChangedUnlisten) {
     pttHotkeysChangedUnlisten = await listen("ptt-hotkeys-changed", () => {
-      // Nothing to update here since mini waveform is removed
+      refreshHotkeyHelpText();
     });
   }
 }
@@ -170,6 +307,15 @@ function cleanupEventListeners() {
 
   captureStateChangedUnlisten?.();
   captureStateChangedUnlisten = null;
+
+  recordingStartedUnlisten?.();
+  recordingStartedUnlisten = null;
+
+  recordingStoppedUnlisten?.();
+  recordingStoppedUnlisten = null;
+
+  visualizationDataUnlisten?.();
+  visualizationDataUnlisten = null;
 
   historyEntryDeletedUnlisten?.();
   historyEntryDeletedUnlisten = null;
@@ -444,7 +590,18 @@ window.addEventListener("DOMContentLoaded", () => {
   modelPathEl = document.querySelector("#model-path");
   downloadModelBtn = document.querySelector("#download-model-btn");
   downloadStatusEl = document.querySelector("#download-status");
+  miniWaveformCanvas = document.querySelector("#mini-waveform");
+  miniWaveformHelp = document.querySelector("#mini-waveform-help");
   closeBtn = document.querySelector("#close-btn");
+
+  // Initialize the mini waveform renderer
+  if (miniWaveformCanvas) {
+    try {
+      miniWaveformRenderer = new MiniWaveformRenderer(miniWaveformCanvas);
+    } catch (error) {
+      console.error("Failed to create MiniWaveformRenderer:", error);
+    }
+  }
 
   // Swap logo image based on theme
   const appLogo = document.querySelector<HTMLImageElement>(".app-logo");
@@ -474,6 +631,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("visibilitychange", async () => {
     if (!document.hidden) {
       checkModelStatus();
+      refreshHotkeyHelpText();
       try {
         await invoke<CaptureStatus>("get_status");
       } catch {
@@ -533,6 +691,7 @@ async function initializeApp() {
 
   if (!setupActive) {
     checkModelStatus();
+    refreshHotkeyHelpText();
 
     await loadHistory();
     startupLog(`loadHistory done (+${elapsed()})`);
@@ -552,6 +711,7 @@ async function initializeApp() {
       } catch {
         // Ignore
       }
+      refreshHotkeyHelpText();
       await loadHistory();
     });
   }

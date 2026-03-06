@@ -14,10 +14,11 @@
       <header class="app-header" data-tauri-drag-region>
         <div class="header-left">
           <img src="/src/assets/flowstt-landscape.svg" alt="FlowSTT" class="app-logo" />
-          <span class="beta-badge">BETA</span>
-
+          <canvas id="mini-waveform" class="mini-waveform" title="Recording..."></canvas>
+          <div id="mini-waveform-help" class="mini-waveform-help"></div>
         </div>
         <div class="header-right">
+          <span class="beta-badge">BETA</span>
           <button id="about-btn" class="header-btn" title="About">
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><path d="M8 11V7.5"/><circle cx="8" cy="5" r="0.5" fill="currentColor" stroke="none"/></svg>
           </button>

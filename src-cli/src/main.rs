@@ -10,6 +10,7 @@ use colored::Colorize;
 use flowstt_common::config::Config;
 use flowstt_common::ipc::{EventType, Request, Response};
 use flowstt_common::{runtime_mode, AudioSourceType, ConfigValues, HotkeyCombination, KeyCode, RecordingMode, TranscriptionMode};
+// TranscriptionMode is now defined in flowstt_common (app-level concept, not vtx-engine)
 
 use client::Client;
 

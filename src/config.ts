@@ -39,6 +39,8 @@ interface ConfigValues {
   auto_paste_delay_ms: number;
   restore_clipboard_enabled: boolean;
   mic_gain: number;
+  preferred_source1_id: string | null;
+  preferred_source2_id: string | null;
 }
 
 // Display names for key codes (snake_case serde name -> display)
@@ -600,11 +602,14 @@ async function loadState() {
     populateSourceDropdown(source1Select, allDevices);
     populateSourceDropdown(source2Select, allDevices);
 
-    if (status.source1_id) {
-      source1Select.value = status.source1_id;
+    // Prefer persisted config values; fall back to live engine status
+    const s1 = config.preferred_source1_id || status.source1_id;
+    const s2 = config.preferred_source2_id || status.source2_id;
+    if (s1) {
+      source1Select.value = s1;
     }
-    if (status.source2_id) {
-      source2Select.value = status.source2_id;
+    if (s2) {
+      source2Select.value = s2;
     }
 
     hotkeys = pttStatus.hotkeys || [];
