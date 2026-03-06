@@ -4,6 +4,7 @@
 //! Tauri commands call AudioEngine methods directly.
 //! The IPC socket server is hosted by this process for CLI client access.
 
+mod clipboard;
 mod hotkey;
 mod ipc;
 mod tray;
@@ -229,6 +230,22 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent, is_ptt_mode
             }
 
             let _ = app_handle.emit("transcription-complete", &enriched);
+
+            // Copy to clipboard and optionally paste into the foreground app.
+            // Config is loaded from disk so runtime changes take effect immediately.
+            // Run on a blocking thread to avoid holding up the engine event loop.
+            {
+                let text = result.text.clone();
+                std::thread::spawn(move || {
+                    let config = flowstt_common::config::Config::load();
+                    clipboard::copy_and_paste(
+                        &text,
+                        config.auto_paste_enabled,
+                        config.auto_paste_delay_ms,
+                        config.restore_clipboard_enabled,
+                    );
+                });
+            }
 
             // On Windows, WebView2 can enter a frozen rendering state when
             // Alt (the default PTT key) is released while the window is focused.
