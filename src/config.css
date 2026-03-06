@@ -87,6 +87,23 @@ body {
     overflow-y: auto;
 }
 
+.config-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.config-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.config-content::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 3px;
+}
+
+.config-content::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
 .config-field {
     display: flex;
     flex-direction: column;
