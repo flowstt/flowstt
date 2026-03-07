@@ -31,8 +31,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["clock"] }
 
 # vtx-engine: audio capture, speech detection, transcription
+# All shared types (AudioDevice, KeyCode, EngineEvent, etc.) are re-exported
+# from vtx-engine::common — there is no separate vtx-common crate.
 vtx-engine = "0.1.0"
-vtx-common = "0.1.0"
 
 # FlowSTT IPC protocol and app config types
 flowstt-common = { path = "../src-common" }

@@ -20,8 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use tracing::{debug, error, info};
-use vtx_common::KeyCode;
-use vtx_engine::AudioEngine;
+use vtx_engine::{AudioEngine, KeyCode};
 
 use flowstt_common::HotkeyCombination;
 

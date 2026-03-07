@@ -1225,7 +1225,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
- "vtx-common",
  "vtx-engine",
  "windows 0.61.3",
  "zip 2.4.2",
@@ -1256,7 +1255,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "vtx-common",
+ "vtx-engine",
  "windows 0.58.0",
 ]
 
@@ -5943,16 +5942,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "vtx-common"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "vtx-engine"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bc46ccbde52390801518b104938df0677b1cb3df466a5933b8c2330c7351f7d"
 dependencies = [
  "aec3",
  "block2 0.5.1",
@@ -5977,7 +5970,6 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "uuid",
- "vtx-common",
  "windows 0.58.0",
  "zip 2.4.2",
 ]

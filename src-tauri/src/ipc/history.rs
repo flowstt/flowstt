@@ -2,8 +2,7 @@
 //!
 //! Uses vtx-engine's TranscriptionHistory for persistence.
 
-use vtx_common::HistoryEntry;
-use vtx_engine::TranscriptionHistory;
+use vtx_engine::{HistoryEntry, TranscriptionHistory};
 
 const MAX_HISTORY_ENTRIES: usize = 500;
 

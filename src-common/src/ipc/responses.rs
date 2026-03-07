@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{ConfigValues, CudaStatus, PttStatus, TranscribeStatus, VisualizationData};
-use vtx_common::{AudioDevice, HistoryEntry, ModelStatus, TranscriptionResult};
+use vtx_engine::{AudioDevice, HistoryEntry, ModelStatus, TranscriptionResult};
 
 /// IPC response from service to client.
 #[derive(Debug, Clone, Serialize, Deserialize)]

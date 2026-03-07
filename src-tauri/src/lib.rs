@@ -13,9 +13,9 @@ use flowstt_common::config::{Config, LogLevel, ThemeMode};
 use flowstt_common::{
     runtime_mode, ConfigValues, HotkeyCombination, RecordingMode, RuntimeMode, TranscriptionMode,
 };
-// TranscriptionMode is now defined in flowstt_common, not vtx_common
-use vtx_common::{AudioDevice, EngineEvent, HistoryEntry, ModelStatus};
-use vtx_engine::{AudioEngine, EngineBuilder, EngineConfig, TranscriptionHistory};
+// All shared audio/transcription types come from vtx_engine (re-exported from
+// vtx_engine::common). There is no separate vtx-common crate.
+use vtx_engine::{AudioDevice, AudioEngine, EngineBuilder, EngineConfig, EngineEvent, HistoryEntry, ModelStatus, TranscriptionHistory};
 use std::env;
 use std::sync::Arc;
 use std::time::Instant;
@@ -210,7 +210,7 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent, is_ptt_mode
             let id = uuid::Uuid::new_v4().to_string();
             let timestamp = chrono::Utc::now().to_rfc3339();
 
-            let enriched = vtx_common::TranscriptionResult {
+            let enriched = vtx_engine::TranscriptionResult {
                 id: Some(id.clone()),
                 text: result.text.clone(),
                 timestamp: Some(timestamp.clone()),

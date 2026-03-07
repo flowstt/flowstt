@@ -16,9 +16,10 @@ pub mod types;
 
 pub use config::ThemeMode;
 
-// Re-export shared audio/transcription types from vtx-common.
-// These replace the duplicate definitions previously in flowstt-common.
-pub use vtx_common::{
+// Re-export shared audio/transcription types from vtx-engine.
+// All shared types (AudioDevice, KeyCode, etc.) are defined in vtx_engine::common
+// and re-exported at the vtx_engine crate root — there is no separate vtx-common crate.
+pub use vtx_engine::{
     AudioDevice, AudioSourceType, HotkeyCombination, KeyCode, RecordingMode,
     TranscriptionResult, ModelStatus, HistoryEntry,
 };

@@ -5,7 +5,7 @@
 //! Only types unique to FlowSTT's IPC protocol and app layer are defined here.
 
 use serde::{Deserialize, Serialize};
-use vtx_common::HotkeyCombination;
+use vtx_engine::HotkeyCombination;
 
 /// Transcription mode — an app-level concept that determines how FlowSTT
 /// decides when to record audio for transcription.
@@ -25,8 +25,8 @@ pub enum TranscriptionMode {
     PushToTalk,
 }
 
-// Re-export from vtx-common so internal modules can use crate-internal types
-pub use vtx_common::{
+// Re-export from vtx-engine so internal modules can use crate-internal types
+pub use vtx_engine::{
     AudioDevice, AudioSourceType, HistoryEntry, KeyCode, ModelStatus, RecordingMode,
     TranscriptionResult,
 };

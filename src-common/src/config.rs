@@ -10,7 +10,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use vtx_common::{HotkeyCombination, KeyCode, RecordingMode};
+use vtx_engine::{HotkeyCombination, KeyCode, RecordingMode};
 
 use crate::types::TranscriptionMode;
 

@@ -697,6 +697,8 @@ async fn get_config_values(client: &mut Client) -> Result<ConfigValues, CliError
         auto_paste_delay_ms: config.auto_paste_delay_ms,
         restore_clipboard_enabled: config.restore_clipboard_enabled,
         mic_gain: config.mic_gain,
+        preferred_source1_id: config.preferred_source1_id,
+        preferred_source2_id: config.preferred_source2_id,
     })
 }
 

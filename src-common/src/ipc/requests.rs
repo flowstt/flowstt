@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use vtx_common::{AudioSourceType, HotkeyCombination, RecordingMode};
+use vtx_engine::{AudioSourceType, HotkeyCombination, RecordingMode};
 
 use crate::types::TranscriptionMode;
 

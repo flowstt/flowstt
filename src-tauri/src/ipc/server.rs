@@ -5,8 +5,7 @@
 
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
-use vtx_engine::AudioEngine;
-use vtx_common::AudioSourceType;
+use vtx_engine::{AudioEngine, AudioSourceType};
 use flowstt_common::config::Config;
 use flowstt_common::ipc::{Request, Response};
 use flowstt_common::{ConfigValues, runtime_mode};
@@ -293,9 +292,9 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
         Request::SetAecEnabled { enabled } => {
             let mut config = Config::load();
             config.recording_mode = if enabled {
-                vtx_common::RecordingMode::EchoCancel
+                vtx_engine::RecordingMode::EchoCancel
             } else {
-                vtx_common::RecordingMode::Mixed
+                vtx_engine::RecordingMode::Mixed
             };
             match config.save() {
                 Ok(()) => Response::Ok,

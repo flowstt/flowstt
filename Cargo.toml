@@ -5,20 +5,15 @@ resolver = "2"
 # =============================================================================
 # Local development override
 #
-# Uncomment the [patch.crates-io] block below to build FlowSTT against a local
-# checkout of vtx-engine (expected at ../vtx-engine relative to this workspace).
+# Uncomment the [patch.crates-io] section below to build FlowSTT against a
+# local checkout of vtx-engine (expected at ../../vtx-engine relative to this
+# Cargo.toml, i.e. a sibling of the flowstt/ directory).
 #
 # Usage:
-#   1. Checkout vtx-engine at ~/ws/vtx-engine (sibling to ~/ws/flowstt/flowstt)
-#      i.e. ../../vtx-engine relative to this Cargo.toml
-#   2. Uncomment the two lines in [patch.crates-io] below
-#   3. Run `cargo build` -- vtx-engine resolves from the local path
-#   4. Re-comment the block before committing (CI always uses the registry version)
+#   1. Checkout vtx-engine at ~/ws/vtx-engine
+#   2. Uncomment the [patch.crates-io] block below
+#   3. Run `cargo build` — vtx-engine resolves from the local path
+#   4. Re-comment before committing (CI always uses the crates.io version)
 #
-# NOTE: vtx-engine is not yet published to crates.io.
-# The [patch.crates-io] block below is required until the crate is published.
-# Once published, uncomment the version lines above, comment out the patch block below,
-# and update the versions in src-tauri/Cargo.toml to match.
-[patch.crates-io]
-vtx-engine = { path = "../../vtx-engine/crates/vtx-engine" }
-vtx-common = { path = "../../vtx-engine/crates/vtx-common" }
+# [patch.crates-io]
+# vtx-engine = { path = "../../vtx-engine/crates/vtx-engine" }
