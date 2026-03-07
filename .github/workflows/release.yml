@@ -153,14 +153,24 @@ jobs:
 
       # macOS: build the CLI for the specific cross-compile target, then copy
       # to target/release/ where tauri.macos.conf.json expects to find it.
-      # vtx-engine's build script runs as part of this build and downloads
-      # libwhisper.dylib to target/release/ as a side effect.
+      # vtx-engine's build script downloads libwhisper.dylib into a whisper-cache
+      # directory under target/ and attempts to copy it to target/release/, but
+      # that directory doesn't exist yet when cross-compiling (output goes to
+      # target/<target>/release/). Locate the cached dylib and copy it manually.
       - name: Build CLI release for macOS bundling
         if: matrix.platform == 'macos-latest'
         run: |
           cargo build -p flowstt-cli --release --target ${{ matrix.target }}
           mkdir -p target/release
           cp target/${{ matrix.target }}/release/flowstt target/release/flowstt
+          # vtx-engine caches libwhisper.dylib in target/whisper-cache/
+          DYLIB_SRC=$(find target/whisper-cache -name "libwhisper.dylib" 2>/dev/null | head -1)
+          if [ -z "$DYLIB_SRC" ]; then
+            echo "ERROR: libwhisper.dylib not found in target/whisper-cache"
+            find target -name "libwhisper.dylib" 2>/dev/null || true
+            exit 1
+          fi
+          cp "$DYLIB_SRC" target/release/libwhisper.dylib
           ls -la target/release/libwhisper.dylib
 
       # macOS: verify all required signing secrets are present, fail fast if not.
