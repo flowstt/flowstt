@@ -148,7 +148,6 @@ jobs:
         with:
           workspaces: |
             src-tauri -> target
-            src-engine -> target
             src-common -> target
             src-cli -> target
 
