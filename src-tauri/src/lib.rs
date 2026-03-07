@@ -792,7 +792,7 @@ async fn open_accessibility_settings() -> Result<(), String> {
 async fn check_accessibility_permission() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        return Ok(ipc::hotkey::check_accessibility_permission());
+        Ok(ipc::hotkey::check_accessibility_permission())
     }
     #[cfg(not(target_os = "macos"))]
     {

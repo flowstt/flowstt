@@ -4,10 +4,7 @@
 /// Returns `true` on non-macOS platforms (permission not applicable).
 #[cfg(target_os = "macos")]
 pub fn check_accessibility_permission() -> bool {
-    use std::process::Command;
     // AXIsProcessTrusted() returns whether the current process has accessibility access.
-    // We call it via a small inline check using the Objective-C runtime.
-    // For now, use a simple system call as a proxy until a proper FFI binding exists.
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
     }
@@ -24,16 +21,7 @@ pub fn check_accessibility_permission() -> bool {
 /// No-op on other platforms.
 #[cfg(target_os = "macos")]
 pub fn request_accessibility_permission() {
-    // AXIsProcessTrustedWithOptions with kAXTrustedCheckOptionPrompt = true
-    // triggers the system dialog. We replicate this with a subprocess call
-    // as an interim approach until a proper FFI binding is in place.
-    use std::collections::HashMap;
-    extern "C" {
-        fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
-    }
-    // The simplest approach: calling AXIsProcessTrusted() with prompt option
-    // requires CoreFoundation. Use the existing check as a placeholder; the actual
-    // permission dialog is opened by the OS via the Settings URL.
+    // Open the Accessibility section of System Settings so the user can grant access.
     let _ = std::process::Command::new("open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         .spawn();
