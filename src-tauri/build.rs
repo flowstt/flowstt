@@ -5,18 +5,55 @@ fn main() {
     // and `../target/release/cpu/*.dll` for bundling whisper.cpp libraries. `tauri_build::build()`
     // validates that these globs resolve to at least one file and aborts if they don't.
     //
-    // The whisper DLLs are downloaded and placed there by the `flowstt-engine` build
-    // script, which also runs during debug builds specifically for this purpose. However,
-    // Cargo may execute *this* build script before the engine's build script when both
-    // crates need to be built from scratch (e.g. after `cargo clean`). In that case the
-    // glob validation fails before the DLLs exist.
+    // The whisper DLLs are downloaded and placed there by the vtx-engine build script,
+    // which also runs during debug builds specifically for this purpose. However, Cargo may
+    // execute *this* build script before the engine's build script when both crates need to
+    // be built from scratch (e.g. after `cargo clean`). In that case the glob validation
+    // fails before the DLLs exist.
     //
-    // Work around the race by creating temporary placeholder DLLs when the directories
-    // are empty. The engine build script overwrites them with the real libraries once it finishes.
+    // Work around the race by creating temporary placeholder files when the targets are
+    // absent. The engine build script overwrites them with the real libraries once it finishes.
     #[cfg(target_os = "windows")]
     ensure_release_dll_placeholders();
 
+    // On macOS, tauri-build validates that the bundle resources declared in
+    // tauri.macos.conf.json exist: `../target/release/flowstt` (the CLI binary) and
+    // `../target/release/libwhisper.dylib`. During clippy runs in CI these files may not
+    // yet exist. Create zero-byte placeholders so tauri-build can proceed; they are
+    // overwritten by the real build artifacts before any actual bundle is produced.
+    #[cfg(target_os = "macos")]
+    ensure_macos_resource_placeholders();
+
     tauri_build::build();
+}
+
+/// Create placeholder files for macOS bundle resources that tauri-build validates at
+/// build-script time: `target/release/flowstt` and `target/release/libwhisper.dylib`.
+/// These placeholders are only created when the real files are absent, so they do not
+/// interfere with actual release builds where the artifacts already exist.
+#[cfg(target_os = "macos")]
+fn ensure_macos_resource_placeholders() {
+    use std::path::PathBuf;
+
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
+    let target_dir = out_dir
+        .ancestors()
+        .find(|p| p.file_name().map(|n| n == "target").unwrap_or(false))
+        .map(|p| p.to_path_buf());
+
+    let Some(target_dir) = target_dir else {
+        return;
+    };
+
+    let release_dir = target_dir.join("release");
+    let _ = std::fs::create_dir_all(&release_dir);
+
+    for name in &["flowstt", "libwhisper.dylib"] {
+        let path = release_dir.join(name);
+        if !path.exists() {
+            let _ = std::fs::File::create(&path);
+        }
+    }
 }
 
 /// Create placeholder files in `target/release/cuda/` and `target/release/cpu/`

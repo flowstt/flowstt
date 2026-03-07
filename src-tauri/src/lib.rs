@@ -796,7 +796,7 @@ async fn check_accessibility_permission() -> Result<bool, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        return Ok(true);
+        Ok(true)
     }
 }
 
