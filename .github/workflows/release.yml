@@ -153,30 +153,15 @@ jobs:
 
       # macOS: build the CLI for the specific cross-compile target, then copy
       # to target/release/ where tauri.macos.conf.json expects to find it.
-      # vtx-engine's xcframework zip ships whisper as a .framework bundle
-      # (not a standalone libwhisper.dylib), so we extract the universal dylib
-      # directly from the release zip and place it where Tauri expects it.
+      # vtx-engine's build script downloads libwhisper.dylib and copies it to
+      # target/release/ — but only if that directory already exists when the
+      # build script runs. Pre-create it so the copy succeeds.
       - name: Build CLI release for macOS bundling
         if: matrix.platform == 'macos-latest'
-        shell: bash
-        env:
-          WHISPER_VERSION: "1.8.2"
         run: |
-          cargo build -p flowstt-cli --release --target ${{ matrix.target }}
           mkdir -p target/release
+          cargo build -p flowstt-cli --release --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/flowstt target/release/flowstt
-
-          # Extract libwhisper.dylib from the xcframework release zip.
-          # The universal dylib (arm64+x86_64) lives at:
-          #   build-apple/whisper.xcframework/macos-arm64_x86_64/whisper.framework/Versions/A/whisper
-          XCFW_URL="https://github.com/ggml-org/whisper.cpp/releases/download/v${WHISPER_VERSION}/whisper-v${WHISPER_VERSION}-xcframework.zip"
-          XCFW_ZIP="$RUNNER_TEMP/whisper-xcframework.zip"
-          echo "Downloading whisper.cpp xcframework from ${XCFW_URL}..."
-          curl -fsSL --retry 3 -o "$XCFW_ZIP" "$XCFW_URL"
-          unzip -j "$XCFW_ZIP" \
-            "build-apple/whisper.xcframework/macos-arm64_x86_64/whisper.framework/Versions/A/whisper" \
-            -d "$RUNNER_TEMP/whisper-xcfw"
-          cp "$RUNNER_TEMP/whisper-xcfw/whisper" target/release/libwhisper.dylib
           ls -la target/release/libwhisper.dylib
 
       # macOS: verify all required signing secrets are present, fail fast if not.
