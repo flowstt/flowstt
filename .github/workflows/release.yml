@@ -153,15 +153,31 @@ jobs:
 
       # macOS: build the CLI for the specific cross-compile target, then copy
       # to target/release/ where tauri.macos.conf.json expects to find it.
-      # vtx-engine's build script downloads libwhisper.dylib and copies it to
-      # target/release/ — but only if that directory already exists when the
-      # build script runs. Pre-create it so the copy succeeds.
+      # vtx-engine's build script searches the xcframework zip for libwhisper.dylib
+      # by filename, but whisper.cpp v1.8.2 ships the dylib inside a .framework
+      # bundle (named "whisper", not "libwhisper.dylib"), so the build script
+      # silently fails to extract it. Work around by extracting and thinning it here.
       - name: Build CLI release for macOS bundling
         if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          WHISPER_VERSION: "1.8.2"
+          # Map Cargo target triple to lipo arch name
+          LIPO_ARCH: ${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x86_64' }}
         run: |
-          mkdir -p target/release
           cargo build -p flowstt-cli --release --target ${{ matrix.target }}
+          mkdir -p target/release
           cp target/${{ matrix.target }}/release/flowstt target/release/flowstt
+
+          # Extract the macOS dylib from the xcframework and thin it to the
+          # correct architecture for this build target.
+          XCFW_URL="https://github.com/ggml-org/whisper.cpp/releases/download/v${WHISPER_VERSION}/whisper-v${WHISPER_VERSION}-xcframework.zip"
+          XCFW_ZIP="$RUNNER_TEMP/whisper-xcframework.zip"
+          curl -fsSL --retry 3 -o "$XCFW_ZIP" "$XCFW_URL"
+          unzip -j "$XCFW_ZIP" \
+            "build-apple/whisper.xcframework/macos-arm64_x86_64/whisper.framework/Versions/A/whisper" \
+            -d "$RUNNER_TEMP/whisper-xcfw"
+          lipo "$RUNNER_TEMP/whisper-xcfw/whisper" -thin "$LIPO_ARCH" -output target/release/libwhisper.dylib
           ls -la target/release/libwhisper.dylib
 
       # macOS: verify all required signing secrets are present, fail fast if not.
