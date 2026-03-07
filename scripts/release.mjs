@@ -181,7 +181,6 @@ const updateTargets = async () => {
   await updateJsonVersion(path.join(repoRoot, "package.json"));
   await updateJsonVersion(path.join(repoRoot, "src-tauri", "tauri.conf.json"));
   await updateCargoVersion(path.join(repoRoot, "src-tauri", "Cargo.toml"));
-  await updateCargoVersion(path.join(repoRoot, "src-engine", "Cargo.toml"));
   await updateCargoVersion(path.join(repoRoot, "src-common", "Cargo.toml"));
   await updateCargoVersion(path.join(repoRoot, "src-cli", "Cargo.toml"));
   await updateReadme(path.join(repoRoot, "README.md"));
@@ -213,7 +212,7 @@ const main = async () => {
   }
   console.log("Syncing Cargo.lock...");
   run("cargo", ["update", "--workspace"], { stdio: "inherit" });
-  run("git", ["add", "package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-engine/Cargo.toml", "src-common/Cargo.toml", "src-cli/Cargo.toml", "README.md", "Cargo.lock"]);
+  run("git", ["add", "package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-common/Cargo.toml", "src-cli/Cargo.toml", "README.md", "Cargo.lock"]);
   const staged = run("git", ["diff", "--cached", "--name-only"]);
   if (!staged) {
     console.error("No changes staged for commit. Aborting release.");

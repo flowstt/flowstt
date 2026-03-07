@@ -83,9 +83,6 @@ jobs:
       - name: Rust lint - src-common
         run: cargo clippy --manifest-path src-common/Cargo.toml --all-targets -- -D warnings
 
-      - name: Rust lint - src-engine
-        run: cargo clippy --manifest-path src-engine/Cargo.toml --all-targets -- -D warnings
-
       - name: Rust lint - src-cli
         run: cargo clippy --manifest-path src-cli/Cargo.toml --all-targets -- -D warnings
 
@@ -157,19 +154,14 @@ jobs:
 
       # macOS: build the CLI for the specific cross-compile target, then copy
       # to target/release/ where tauri.macos.conf.json expects to find it.
+      # vtx-engine's build script runs as part of this build and downloads
+      # libwhisper.dylib to target/release/ as a side effect.
       - name: Build CLI release for macOS bundling
         if: matrix.platform == 'macos-latest'
         run: |
           cargo build -p flowstt-cli --release --target ${{ matrix.target }}
           mkdir -p target/release
           cp target/${{ matrix.target }}/release/flowstt target/release/flowstt
-
-      # macOS: build the engine to trigger the build script that downloads
-      # whisper.cpp and copies libwhisper.dylib to target/release/.
-      - name: Build engine for macOS bundling
-        if: matrix.platform == 'macos-latest'
-        run: |
-          cargo build -p flowstt-engine --release --target ${{ matrix.target }}
           ls -la target/release/libwhisper.dylib
 
       # macOS: verify all required signing secrets are present, fail fast if not.
