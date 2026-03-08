@@ -327,6 +327,9 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent, is_ptt_mode
                 tray::update_tray_icon(app_handle, false);
             }
         }
+        EngineEvent::PlaybackComplete => {
+            // No playback UI; ignore.
+        }
     }
 }
 

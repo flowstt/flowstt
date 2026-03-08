@@ -17,23 +17,38 @@ crate-type = ["cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png", "protocol-asset"] }
+tauri = { version = "2", features = [
+    "macos-private-api",
+    "tray-icon",
+    "image-png",
+    "protocol-asset",
+] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
 directories = "5"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "io-util", "net"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "io-util",
+    "net",
+] }
 tracing = "0.1"
 tracing-appender = "0.2"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "fmt",
+    "registry",
+] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["clock"] }
 
 # vtx-engine: audio capture, speech detection, transcription
 # All shared types (AudioDevice, KeyCode, EngineEvent, etc.) are re-exported
 # from vtx-engine::common — there is no separate vtx-common crate.
-vtx-engine = "0.1.0"
+vtx-engine = "0.1.2"
 
 # FlowSTT IPC protocol and app config types
 flowstt-common = { path = "../src-common" }

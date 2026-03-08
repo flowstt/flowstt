@@ -2,9 +2,8 @@
 # Build all components for testing
 
 .PHONY: all clean build build-debug build-release build-cuda \
-        frontend app cli engine \
+        frontend app cli \
         app-debug app-release app-cuda \
-        engine-debug engine-release engine-cuda \
         run-app run-app-release \
         run-cli run-cli-release \
         lint lint-rust lint-ts test \
@@ -35,18 +34,18 @@ frontend:
 	@echo "==> Building frontend..."
 	pnpm build
 
-# Build flowstt-app/Tauri GUI (debug) - includes engine
-app-debug: engine-debug
+# Build flowstt-app/Tauri GUI (debug)
+app-debug:
 	@echo "==> Building flowstt-app (debug)..."
 	cargo build -p flowstt-app
 
-# Build flowstt-app/Tauri GUI (release) - includes engine
-app-release: cli-release engine-release
+# Build flowstt-app/Tauri GUI (release)
+app-release: cli-release
 	@echo "==> Building flowstt-app (release)..."
 	cargo build -p flowstt-app --release
 
 # Build flowstt-app with CUDA acceleration (release)
-app-cuda: cli-release engine-cuda
+app-cuda: cli-release
 	@echo "==> Building flowstt-app with CUDA (release)..."
 	cargo build -p flowstt-app --release --features cuda
 
@@ -63,21 +62,6 @@ cli-release:
 	@echo "==> Building flowstt CLI (release)..."
 	cargo build -p flowstt-cli --release
 
-# Build flowstt-engine (debug)
-engine-debug:
-	@echo "==> Building flowstt-engine (debug)..."
-	cargo build -p flowstt-engine
-
-# Build flowstt-engine (release)
-engine-release:
-	@echo "==> Building flowstt-engine (release)..."
-	cargo build -p flowstt-engine --release
-
-# Build flowstt-engine with CUDA acceleration (release)
-engine-cuda:
-	@echo "==> Building flowstt-engine with CUDA (release)..."
-	cargo build -p flowstt-engine --release --features cuda
-
 # Alias for release
 cli: cli-release
 
@@ -90,13 +74,10 @@ lint: lint-rust lint-ts
 
 # Rust linting (per crate, in order)
 # src-tauri is linted last because tauri-build validates bundle resource paths
-# at build-script time (even during clippy). Build flowstt-engine first so its
-# build script downloads and copies whisper libraries into target/release/.
-lint-rust: engine-debug cli-release
+# at build-script time (even during clippy).
+lint-rust: cli-release
 	@echo "==> Linting src-common..."
 	cargo clippy --manifest-path src-common/Cargo.toml --all-targets -- -D warnings
-	@echo "==> Linting src-engine..."
-	cargo clippy --manifest-path src-engine/Cargo.toml --all-targets -- -D warnings
 	@echo "==> Linting src-cli..."
 	cargo clippy --manifest-path src-cli/Cargo.toml --all-targets -- -D warnings
 	@echo "==> Linting src-tauri..."
@@ -210,7 +191,7 @@ help:
 	@echo "  build-release    Build all components (release mode)"
 	@echo "  build-cuda       Build with CUDA GPU acceleration for transcription"
 	@echo "  frontend         Build frontend only"
-	@echo "  app              Build flowstt-app (release, includes engine)"
+	@echo "  app              Build flowstt-app (release)"
 	@echo "  app-debug        Build flowstt-app (debug)"
 	@echo "  app-cuda         Build flowstt-app with CUDA (release)"
 	@echo "  cli              Build flowstt CLI (release)"
