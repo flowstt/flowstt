@@ -610,12 +610,14 @@ async fn set_restore_clipboard(enabled: bool) -> Result<(), String> {
     config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
-/// Set the microphone input gain multiplier (1.0–4.0)
+/// Set the microphone input gain in dB (−20.0 to +20.0)
 #[tauri::command]
-async fn set_mic_gain(gain: f32) -> Result<(), String> {
+async fn set_mic_gain(engine: State<'_, EngineState>, gain: f32) -> Result<(), String> {
     let mut config = Config::load();
     config.mic_gain = gain;
-    config.save().map_err(|e| format!("Failed to save config: {}", e))
+    config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    engine.engine.set_mic_gain(gain);
+    Ok(())
 }
 
 /// History entry struct for frontend compatibility
@@ -1449,6 +1451,7 @@ fn build_engine_config(config: &Config) -> EngineConfig {
     let mut engine_config = EngineConfig::load("FlowSTT").unwrap_or_default();
     // Apply FlowSTT app-config overrides that affect engine behaviour
     engine_config.recording_mode = config.recording_mode;
+    engine_config.mic_gain_db = config.mic_gain;
     // word_break_segmentation_enabled defaults to true in EngineConfig::default()
     engine_config
 }

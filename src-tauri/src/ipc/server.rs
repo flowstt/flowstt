@@ -333,7 +333,10 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
             let mut config = Config::load();
             config.mic_gain = gain;
             match config.save() {
-                Ok(()) => Response::Ok,
+                Ok(()) => {
+                    engine.set_mic_gain(gain);
+                    Response::Ok
+                }
                 Err(e) => Response::error(format!("Failed to save config: {}", e)),
             }
         }

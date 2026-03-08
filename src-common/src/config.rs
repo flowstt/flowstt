@@ -85,7 +85,7 @@ pub struct Config {
     /// Whether to save and restore clipboard contents around each transcription paste
     #[serde(default = "default_restore_clipboard_enabled")]
     pub restore_clipboard_enabled: bool,
-    /// Microphone input gain multiplier applied before VAD and transcription (1.0–4.0, default 1.0)
+    /// Microphone input gain in dB applied before VAD and transcription (−20.0 to +20.0 dB, default 0.0)
     #[serde(default = "default_mic_gain")]
     pub mic_gain: f32,
     /// Recording mode: Mixed combines both streams; EchoCancel outputs only echo-cancelled primary
@@ -110,7 +110,7 @@ fn default_restore_clipboard_enabled() -> bool {
 }
 
 fn default_mic_gain() -> f32 {
-    1.0
+    0.0
 }
 
 /// Legacy configuration format for backward-compatible loading.
@@ -228,7 +228,7 @@ impl Config {
             preferred_source2_id: None,
             log_level: LogLevel::default(),
             restore_clipboard_enabled: true,
-            mic_gain: 1.0,
+            mic_gain: 0.0,
             recording_mode: RecordingMode::default(),
         }
     }
@@ -279,7 +279,7 @@ impl Config {
             preferred_source2_id: legacy.preferred_source2_id,
             log_level: legacy.log_level.unwrap_or_default(),
             restore_clipboard_enabled: legacy.restore_clipboard_enabled.unwrap_or(true),
-            mic_gain: legacy.mic_gain.unwrap_or(1.0),
+            mic_gain: legacy.mic_gain.unwrap_or(0.0),
             recording_mode: RecordingMode::default(),
         }
     }

@@ -70,7 +70,7 @@ pub struct ConfigValues {
     /// Whether to save and restore clipboard contents around each transcription paste
     #[serde(default = "default_restore_clipboard_enabled")]
     pub restore_clipboard_enabled: bool,
-    /// Microphone input gain multiplier (1.0–4.0, default 1.0)
+    /// Microphone input gain in dB (−20.0 to +20.0 dB, default 0.0)
     #[serde(default = "default_mic_gain")]
     pub mic_gain: f32,
     /// Preferred primary audio input device ID
@@ -91,7 +91,7 @@ fn default_restore_clipboard_enabled() -> bool {
     true
 }
 fn default_mic_gain() -> f32 {
-    1.0
+    0.0
 }
 
 /// Push-to-talk status information.

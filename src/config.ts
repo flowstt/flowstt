@@ -622,9 +622,9 @@ async function loadState() {
     restoreClipboardCheckbox.checked = config.restore_clipboard_enabled;
 
     // Audio detection settings
-    const gain = config.mic_gain ?? 1.0;
+    const gain = config.mic_gain ?? 0.0;
     micGainSlider.value = String(gain);
-    micGainValueEl.textContent = gain.toFixed(1);
+    micGainValueEl.textContent = String(Math.round(gain));
 
     // Toggle hotkeys loading - disabled for now
     // toggleHotkeys = pttStatus.auto_toggle_hotkeys || [];
@@ -711,7 +711,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   micGainSlider.addEventListener("input", () => {
-    micGainValueEl.textContent = parseFloat(micGainSlider.value).toFixed(1);
+    micGainValueEl.textContent = String(parseInt(micGainSlider.value, 10));
   });
 
   micGainSlider.addEventListener("change", async () => {

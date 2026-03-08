@@ -87,9 +87,9 @@ pub enum Request {
         /// Whether clipboard restore should be enabled
         enabled: bool,
     },
-    /// Set the microphone input gain multiplier (1.0–4.0)
+    /// Set the microphone input gain in dB (−20.0 to +20.0)
     SetMicGain {
-        /// Gain multiplier applied to mic samples before VAD and transcription
+        /// Gain in dB applied to mic samples before VAD and transcription
         gain: f32,
     },
     // === History Management ===
