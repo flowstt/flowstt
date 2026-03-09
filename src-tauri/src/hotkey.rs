@@ -348,6 +348,7 @@ mod win_raw_input {
 
     /// Run the Raw Input message loop.  Blocks until `stop_flag` is set or
     /// WM_QUIT is received.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn run_message_loop(
         stop_flag: Arc<AtomicBool>,
         engine: Arc<AudioEngine>,
