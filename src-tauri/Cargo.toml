@@ -78,4 +78,12 @@ windows = { version = "0.61", features = [
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Linux-only: rdev for global keyboard hook via X11/evdev
+[target.'cfg(target_os = "linux")'.dependencies]
 rdev = "0.5.3"
+
+# macOS-only: CGEventTap for global keyboard hook (avoids rdev's TSM crash)
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = { version = "0.25", features = ["highsierra"] }

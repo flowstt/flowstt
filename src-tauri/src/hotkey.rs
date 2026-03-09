@@ -12,7 +12,12 @@
 //! - **Windows**: Uses the Raw Input API (`RegisterRawInputDevices` with
 //!   `RIDEV_INPUTSINK`) on a hidden message-only window.  This is the same
 //!   approach the original flowstt-engine used and is known to work reliably.
-//! - **Other platforms**: Falls back to `rdev::listen` (low-level keyboard hook).
+//! - **macOS**: Uses `CGEventTap` (Core Graphics) to install a passive HID
+//!   event tap.  The raw virtual keycode field is read directly from the event;
+//!   no character translation (TSM) is performed.  This avoids the
+//!   `dispatch_assert_queue` crash that `rdev` triggers by calling
+//!   `TSMGetInputSourceProperty` off the main thread.
+//! - **Linux**: Uses `rdev::listen` (low-level keyboard hook via X11/evdev).
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -488,9 +493,394 @@ mod win_raw_input {
     }
 }
 
-// ─── rdev fallback for non-Windows platforms ────────────────────────────────
+// ─── macOS CGEventTap backend ────────────────────────────────────────────────
+//
+// rdev on macOS calls TSMGetInputSourceProperty to translate raw keycodes to
+// Unicode strings.  That API asserts it's running on the main dispatch queue
+// and crashes with EXC_BREAKPOINT when called from the event tap thread.
+//
+// This backend uses CGEventTap directly and reads only the raw virtual keycode
+// field (kCGKeyboardEventKeycode = 9) — no character translation, no TSM.
+//
+// Design: the CGEventTap callback MUST return quickly or macOS will
+// auto-disable the tap.  Heavy async work (start_capture / stop_capture) is
+// therefore performed on a separate "action thread" that receives PTT
+// transitions via an std::sync::mpsc channel.  The callback only updates the
+// HotkeyTracker and sends a lightweight enum value.
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod macos_backend {
+    use super::*;
+    use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+    use core_graphics::event::{
+        CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
+        CGEventTapPlacement, CGEventTapProxy, CGEventType, CallbackResult,
+    };
+
+    /// macOS virtual key codes (HIToolbox/Events.h).
+    /// Only the subset needed for typical PTT hotkeys is listed here.
+    fn vkcode_to_keycode(vk: u16) -> Option<KeyCode> {
+        match vk {
+            // Letter keys
+            0x00 => Some(KeyCode::KeyA),
+            0x0B => Some(KeyCode::KeyB),
+            0x08 => Some(KeyCode::KeyC),
+            0x02 => Some(KeyCode::KeyD),
+            0x0E => Some(KeyCode::KeyE),
+            0x03 => Some(KeyCode::KeyF),
+            0x05 => Some(KeyCode::KeyG),
+            0x04 => Some(KeyCode::KeyH),
+            0x22 => Some(KeyCode::KeyI),
+            0x26 => Some(KeyCode::KeyJ),
+            0x28 => Some(KeyCode::KeyK),
+            0x25 => Some(KeyCode::KeyL),
+            0x2E => Some(KeyCode::KeyM),
+            0x2D => Some(KeyCode::KeyN),
+            0x1F => Some(KeyCode::KeyO),
+            0x23 => Some(KeyCode::KeyP),
+            0x0C => Some(KeyCode::KeyQ),
+            0x0F => Some(KeyCode::KeyR),
+            0x01 => Some(KeyCode::KeyS),
+            0x11 => Some(KeyCode::KeyT),
+            0x20 => Some(KeyCode::KeyU),
+            0x09 => Some(KeyCode::KeyV),
+            0x0D => Some(KeyCode::KeyW),
+            0x07 => Some(KeyCode::KeyX),
+            0x10 => Some(KeyCode::KeyY),
+            0x06 => Some(KeyCode::KeyZ),
+            // Digit row
+            0x1D => Some(KeyCode::Digit0),
+            0x12 => Some(KeyCode::Digit1),
+            0x13 => Some(KeyCode::Digit2),
+            0x14 => Some(KeyCode::Digit3),
+            0x15 => Some(KeyCode::Digit4),
+            0x17 => Some(KeyCode::Digit5),
+            0x16 => Some(KeyCode::Digit6),
+            0x1A => Some(KeyCode::Digit7),
+            0x1C => Some(KeyCode::Digit8),
+            0x19 => Some(KeyCode::Digit9),
+            // Modifier keys
+            0x38 => Some(KeyCode::LeftShift),
+            0x3C => Some(KeyCode::RightShift),
+            0x3B => Some(KeyCode::LeftControl),
+            0x3E => Some(KeyCode::RightControl),
+            0x3A => Some(KeyCode::LeftAlt),
+            0x3D => Some(KeyCode::RightAlt),
+            0x37 => Some(KeyCode::LeftMeta),
+            0x36 => Some(KeyCode::RightMeta),
+            0x39 => Some(KeyCode::CapsLock),
+            // Function keys
+            0x7A => Some(KeyCode::F1),
+            0x78 => Some(KeyCode::F2),
+            0x63 => Some(KeyCode::F3),
+            0x76 => Some(KeyCode::F4),
+            0x60 => Some(KeyCode::F5),
+            0x61 => Some(KeyCode::F6),
+            0x62 => Some(KeyCode::F7),
+            0x64 => Some(KeyCode::F8),
+            0x65 => Some(KeyCode::F9),
+            0x6D => Some(KeyCode::F10),
+            0x67 => Some(KeyCode::F11),
+            0x6F => Some(KeyCode::F12),
+            0x69 => Some(KeyCode::F13),
+            0x6B => Some(KeyCode::F14),
+            0x71 => Some(KeyCode::F15),
+            0x6A => Some(KeyCode::F16),
+            0x40 => Some(KeyCode::F17),
+            0x4F => Some(KeyCode::F18),
+            0x50 => Some(KeyCode::F19),
+            0x5A => Some(KeyCode::F20),
+            // Navigation
+            0x7B => Some(KeyCode::ArrowLeft),
+            0x7C => Some(KeyCode::ArrowRight),
+            0x7E => Some(KeyCode::ArrowUp),
+            0x7D => Some(KeyCode::ArrowDown),
+            0x73 => Some(KeyCode::Home),
+            0x77 => Some(KeyCode::End),
+            0x74 => Some(KeyCode::PageUp),
+            0x79 => Some(KeyCode::PageDown),
+            0x72 => Some(KeyCode::Insert),
+            0x75 => Some(KeyCode::Delete),
+            // Common keys
+            0x35 => Some(KeyCode::Escape),
+            0x30 => Some(KeyCode::Tab),
+            0x31 => Some(KeyCode::Space),
+            0x24 => Some(KeyCode::Enter),
+            0x33 => Some(KeyCode::Backspace),
+            // Punctuation
+            0x1B => Some(KeyCode::Minus),
+            0x18 => Some(KeyCode::Equal),
+            0x21 => Some(KeyCode::BracketLeft),
+            0x1E => Some(KeyCode::BracketRight),
+            0x2A => Some(KeyCode::Backslash),
+            0x29 => Some(KeyCode::Semicolon),
+            0x27 => Some(KeyCode::Quote),
+            0x32 => Some(KeyCode::Backquote),
+            0x2B => Some(KeyCode::Comma),
+            0x2F => Some(KeyCode::Period),
+            0x2C => Some(KeyCode::Slash),
+            // Numpad
+            0x52 => Some(KeyCode::Numpad0),
+            0x53 => Some(KeyCode::Numpad1),
+            0x54 => Some(KeyCode::Numpad2),
+            0x55 => Some(KeyCode::Numpad3),
+            0x56 => Some(KeyCode::Numpad4),
+            0x57 => Some(KeyCode::Numpad5),
+            0x58 => Some(KeyCode::Numpad6),
+            0x59 => Some(KeyCode::Numpad7),
+            0x5B => Some(KeyCode::Numpad8),
+            0x5C => Some(KeyCode::Numpad9),
+            0x43 => Some(KeyCode::NumpadMultiply),
+            0x45 => Some(KeyCode::NumpadAdd),
+            0x4E => Some(KeyCode::NumpadSubtract),
+            0x41 => Some(KeyCode::NumpadDecimal),
+            0x4B => Some(KeyCode::NumpadDivide),
+            0x47 => Some(KeyCode::NumLock),
+            _ => None,
+        }
+    }
+
+    /// `kCGKeyboardEventKeycode` field index (value = 9).
+    const CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+
+    /// For a FlagsChanged event, determine whether the modifier key identified
+    /// by `vk` is currently pressed by inspecting the event flags bitmask.
+    /// This mirrors the approach used in the original src-engine macOS backend.
+    fn modifier_is_pressed(vk: u16, flags: CGEventFlags) -> bool {
+        match vk {
+            0x38 | 0x3C => flags.contains(CGEventFlags::CGEventFlagShift), // L/R Shift
+            0x3B | 0x3E => flags.contains(CGEventFlags::CGEventFlagControl), // L/R Control
+            0x3A | 0x3D => flags.contains(CGEventFlags::CGEventFlagAlternate), // L/R Alt/Option
+            0x37 | 0x36 => flags.contains(CGEventFlags::CGEventFlagCommand), // L/R Meta/Cmd
+            0x39 => flags.contains(CGEventFlags::CGEventFlagAlphaShift),   // Caps Lock
+            _ => false,
+        }
+    }
+
+    /// Messages sent from the CGEventTap callback to the action thread.
+    enum PttMsg {
+        Pressed {
+            source1: Option<String>,
+            source2: Option<String>,
+        },
+        Released,
+    }
+
+    pub(super) fn run_cgeventtap_loop(
+        stop: Arc<AtomicBool>,
+        engine: Arc<AudioEngine>,
+        initial_combos: Vec<HotkeyCombination>,
+        combos_shared: Arc<Mutex<Vec<HotkeyCombination>>>,
+        sources: SourceConfig,
+        generation: Arc<AtomicU64>,
+        runtime_handle: RuntimeHandle,
+    ) {
+        // Channel: CGEventTap callback → action thread.
+        // The callback only sends lightweight enum values; all blocking async
+        // work happens on the action thread so the tap callback returns fast.
+        let (tx, rx) = std::sync::mpsc::channel::<PttMsg>();
+
+        // Spawn the action thread that performs start/stop capture.
+        {
+            let engine = engine.clone();
+            let runtime_handle = runtime_handle.clone();
+            thread::spawn(move || {
+                for msg in rx {
+                    match msg {
+                        PttMsg::Pressed { source1, source2 } => {
+                            debug!(
+                                "[Hotkey] PTT pressed — opening capture (source1={:?}, source2={:?})",
+                                source1, source2
+                            );
+                            match runtime_handle.block_on(engine.start_capture(source1, source2)) {
+                                Ok(()) => {
+                                    debug!("[Hotkey] Capture started — starting recording");
+                                    engine.start_recording();
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "[Hotkey] start_capture failed, skipping recording: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        PttMsg::Released => {
+                            debug!("[Hotkey] PTT released — stopping recording and capture");
+                            engine.stop_recording();
+                            if let Err(e) = runtime_handle.block_on(engine.stop_capture()) {
+                                warn!("[Hotkey] stop_capture failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                debug!("[Hotkey] Action thread exiting");
+            });
+        }
+
+        // Create an NSAutoreleasePool on this thread before touching any
+        // CoreFoundation/CoreGraphics objects.  rdev does the same thing.
+        // Without this, CGEventTapCreate can silently return NULL on a
+        // non-main thread that was not set up by the ObjC runtime.
+        extern "C" {
+            fn objc_autoreleasePoolPush() -> *mut std::ffi::c_void;
+            fn objc_autoreleasePoolPop(pool: *mut std::ffi::c_void);
+        }
+        let pool = unsafe { objc_autoreleasePoolPush() };
+
+        let tracker = Arc::new(Mutex::new(HotkeyTracker::new(&initial_combos)));
+        // last_gen must be shared+atomic because the CGEventTap callback is Fn (not FnMut).
+        let last_gen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        let tap_result = CGEventTap::new(
+            // Session tap works when the parent process (e.g. iTerm2) has
+            // Accessibility permission — no extra grant needed for the app
+            // binary itself.  HID tap requires the process to be directly
+            // trusted, which fails for ad-hoc dev builds.  This matches the
+            // kCGSessionEventTap used by the original src-engine implementation.
+            CGEventTapLocation::Session,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::ListenOnly,
+            // FlagsChanged is required for modifier-only combos (e.g. RShift+RCtrl).
+            // Modifier keys do NOT generate KeyDown/KeyUp — only FlagsChanged.
+            vec![
+                CGEventType::KeyDown,
+                CGEventType::KeyUp,
+                CGEventType::FlagsChanged,
+            ],
+            {
+                let stop = stop.clone();
+                let combos_shared = combos_shared.clone();
+                let sources = sources.clone();
+                let generation = generation.clone();
+                let tracker = tracker.clone();
+                let last_gen = last_gen.clone();
+                let tx = tx.clone();
+
+                move |_proxy: CGEventTapProxy,
+                      event_type: CGEventType,
+                      event: &CGEvent|
+                      -> CallbackResult {
+                    if stop.load(Ordering::Relaxed) {
+                        return CallbackResult::Keep;
+                    }
+
+                    // Hot-reload combos if generation changed.
+                    let current_gen = generation.load(Ordering::Relaxed);
+                    let prev_gen = last_gen.load(Ordering::Relaxed);
+                    if current_gen != prev_gen {
+                        if let Ok(new_combos) = combos_shared.try_lock() {
+                            if let Ok(mut t) = tracker.try_lock() {
+                                t.update_combos(&new_combos);
+                                last_gen.store(current_gen, Ordering::Relaxed);
+                                debug!("[Hotkey] Combos updated ({} combo(s))", new_combos.len());
+                            }
+                        }
+                    }
+
+                    let raw_vk = event.get_integer_value_field(CG_KEYBOARD_EVENT_KEYCODE) as u16;
+
+                    let is_press = match event_type {
+                        CGEventType::KeyDown => true,
+                        CGEventType::KeyUp => false,
+                        CGEventType::FlagsChanged => {
+                            // Modifier keys only emit FlagsChanged, never KeyDown/KeyUp.
+                            // Derive pressed state from the event flags bitmask.
+                            modifier_is_pressed(raw_vk, event.get_flags())
+                        }
+                        _ => return CallbackResult::Keep,
+                    };
+
+                    let keycode = match vkcode_to_keycode(raw_vk) {
+                        Some(kc) => kc,
+                        None => return CallbackResult::Keep,
+                    };
+
+                    let transition = if let Ok(mut t) = tracker.try_lock() {
+                        if is_press {
+                            t.key_down(keycode)
+                        } else {
+                            t.key_up(keycode)
+                        }
+                    } else {
+                        Transition::None
+                    };
+
+                    // Send to action thread — do NOT block here.
+                    match transition {
+                        Transition::Pressed => {
+                            let (s1, s2) = sources.lock().map(|s| s.clone()).unwrap_or_default();
+                            debug!("[Hotkey] PTT pressed — source1={:?} source2={:?}", s1, s2);
+                            let _ = tx.send(PttMsg::Pressed {
+                                source1: s1,
+                                source2: s2,
+                            });
+                        }
+                        Transition::Released => {
+                            debug!("[Hotkey] PTT released");
+                            let _ = tx.send(PttMsg::Released);
+                        }
+                        Transition::None => {}
+                    }
+
+                    CallbackResult::Keep
+                }
+            },
+        );
+
+        let tap = match tap_result {
+            Ok(t) => t,
+            Err(()) => {
+                error!("[Hotkey] Failed to create CGEventTap — check that the parent process (terminal) has Accessibility permission");
+                unsafe { objc_autoreleasePoolPop(pool) };
+                return;
+            }
+        };
+
+        let loop_source = match tap.mach_port().create_runloop_source(0) {
+            Ok(s) => s,
+            Err(()) => {
+                error!("[Hotkey] Failed to create run loop source for CGEventTap");
+                unsafe { objc_autoreleasePoolPop(pool) };
+                return;
+            }
+        };
+
+        // Get a reference to this thread's run loop so the stop-watcher thread
+        // can call stop() on it to unblock CFRunLoop::run_current().
+        let run_loop = CFRunLoop::get_current();
+        run_loop.add_source(&loop_source, unsafe { kCFRunLoopCommonModes });
+        tap.enable();
+
+        // Spawn a lightweight watcher that polls the stop flag and calls
+        // run_loop.stop() to wake the blocking CFRunLoop::run_current() below.
+        {
+            let stop = stop.clone();
+            let run_loop_watcher = run_loop.clone();
+            thread::spawn(move || loop {
+                thread::sleep(std::time::Duration::from_millis(100));
+                if stop.load(Ordering::Relaxed) {
+                    run_loop_watcher.stop();
+                    break;
+                }
+            });
+        }
+
+        info!("[Hotkey] CGEventTap installed, running event loop");
+
+        // Block this thread on the CFRunLoop — identical to what rdev does
+        // with CFRunLoopRun().  The watcher thread above calls stop() when
+        // the stop flag is set, which unblocks this call.
+        CFRunLoop::run_current();
+
+        unsafe { objc_autoreleasePoolPop(pool) };
+        info!("[Hotkey] CGEventTap loop exiting");
+    }
+}
+
+// ─── Linux rdev backend ──────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
 mod rdev_backend {
     use super::*;
     use rdev::{self, EventType, Key as RdevKey};
@@ -518,7 +908,6 @@ mod rdev_backend {
             RdevKey::F10 => Some(KeyCode::F10),
             RdevKey::F11 => Some(KeyCode::F11),
             RdevKey::F12 => Some(KeyCode::F12),
-            #[cfg(target_os = "linux")]
             RdevKey::Unknown(code) => match *code {
                 183 => Some(KeyCode::F13),
                 184 => Some(KeyCode::F14),
@@ -791,7 +1180,27 @@ impl HotkeyListener {
             tid
         };
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        {
+            let sf = stop_flag.clone();
+            let cs = combos.clone();
+            let ss = sources.clone();
+            let gs = generation.clone();
+            let ec = engine.clone();
+            let ic = hotkey_combos.clone();
+            let rh = runtime_handle;
+
+            thread::spawn(move || {
+                info!(
+                    "[Hotkey] Listener starting with {} combo(s) (CGEventTap)",
+                    ic.len()
+                );
+                macos_backend::run_cgeventtap_loop(sf, ec, ic, cs, ss, gs, rh);
+                info!("[Hotkey] Listener thread exiting");
+            });
+        }
+
+        #[cfg(target_os = "linux")]
         {
             let sf = stop_flag.clone();
             let cs = combos.clone();
