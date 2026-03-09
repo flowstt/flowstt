@@ -33,7 +33,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "**"
+          "**",
+          "$DATA/vtx-engine/recordings/**"
         ]
       }
     }
