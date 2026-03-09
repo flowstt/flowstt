@@ -91,6 +91,13 @@ pub struct Config {
     /// Recording mode: Mixed combines both streams; EchoCancel outputs only echo-cancelled primary
     #[serde(default)]
     pub recording_mode: RecordingMode,
+    /// Whether Automatic Gain Control is enabled (default: true).
+    ///
+    /// When `true`, the engine AGC stage continuously adjusts gain to maintain
+    /// a consistent output level. Manual mic gain (mic_gain) is disabled in the
+    /// UI when AGC is on.
+    #[serde(default = "default_agc_enabled")]
+    pub agc_enabled: bool,
 }
 
 fn default_auto_toggle_hotkeys() -> Vec<HotkeyCombination> {
@@ -111,6 +118,10 @@ fn default_restore_clipboard_enabled() -> bool {
 
 fn default_mic_gain() -> f32 {
     0.0
+}
+
+fn default_agc_enabled() -> bool {
+    true
 }
 
 /// Legacy configuration format for backward-compatible loading.
@@ -144,6 +155,8 @@ struct LegacyConfig {
     restore_clipboard_enabled: Option<bool>,
     /// Microphone input gain (may be absent in old configs)
     mic_gain: Option<f32>,
+    /// AGC enabled (may be absent in old configs — defaults to true on migration)
+    agc_enabled: Option<bool>,
 }
 
 impl Config {
@@ -230,6 +243,7 @@ impl Config {
             restore_clipboard_enabled: true,
             mic_gain: 0.0,
             recording_mode: RecordingMode::default(),
+            agc_enabled: true,
         }
     }
 
@@ -281,6 +295,7 @@ impl Config {
             restore_clipboard_enabled: legacy.restore_clipboard_enabled.unwrap_or(true),
             mic_gain: legacy.mic_gain.unwrap_or(0.0),
             recording_mode: RecordingMode::default(),
+            agc_enabled: legacy.agc_enabled.unwrap_or(true),
         }
     }
 }

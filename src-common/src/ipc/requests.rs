@@ -92,6 +92,11 @@ pub enum Request {
         /// Gain in dB applied to mic samples before VAD and transcription
         gain: f32,
     },
+    /// Enable or disable Automatic Gain Control
+    SetAgcEnabled {
+        /// Whether AGC should be enabled
+        enabled: bool,
+    },
     // === History Management ===
     /// Get all transcription history entries
     GetHistory,

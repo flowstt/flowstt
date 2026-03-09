@@ -39,6 +39,7 @@ interface ConfigValues {
   auto_paste_delay_ms: number;
   restore_clipboard_enabled: boolean;
   mic_gain: number;
+  agc_enabled: boolean;
   preferred_source1_id: string | null;
   preferred_source2_id: string | null;
 }
@@ -178,6 +179,8 @@ let recorderStatusEl: HTMLSpanElement;
 let warningEl: HTMLDivElement;
 let addHotkeyBtn: HTMLButtonElement;
 let restoreClipboardCheckbox: HTMLInputElement;
+let agcCheckbox: HTMLInputElement;
+let micGainField: HTMLDivElement;
 let micGainSlider: HTMLInputElement;
 let micGainValueEl: HTMLSpanElement;
 // Toggle hotkey UI - disabled for now
@@ -622,6 +625,10 @@ async function loadState() {
     restoreClipboardCheckbox.checked = config.restore_clipboard_enabled;
 
     // Audio detection settings
+    const agcEnabled = config.agc_enabled ?? true;
+    agcCheckbox.checked = agcEnabled;
+    applyAgcState(agcEnabled);
+
     const gain = config.mic_gain ?? 0.0;
     micGainSlider.value = String(gain);
     micGainValueEl.textContent = String(Math.round(gain));
@@ -634,6 +641,12 @@ async function loadState() {
     source1Select.innerHTML = `<option value="">Error loading devices</option>`;
     source2Select.innerHTML = `<option value="">Error loading devices</option>`;
   }
+}
+
+/** Show/hide and enable/disable the manual gain slider based on AGC state. */
+function applyAgcState(agcEnabled: boolean): void {
+  micGainField.style.opacity = agcEnabled ? "0.4" : "";
+  micGainSlider.disabled = agcEnabled;
 }
 
 async function onSourceChange() {
@@ -663,6 +676,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   warningEl = document.getElementById("hotkey-warning") as HTMLDivElement;
   addHotkeyBtn = document.getElementById("add-hotkey-btn") as HTMLButtonElement;
   restoreClipboardCheckbox = document.getElementById("restore-clipboard-checkbox") as HTMLInputElement;
+  agcCheckbox = document.getElementById("agc-checkbox") as HTMLInputElement;
+  micGainField = document.getElementById("mic-gain-field") as HTMLDivElement;
   micGainSlider = document.getElementById("mic-gain-slider") as HTMLInputElement;
   micGainValueEl = document.getElementById("mic-gain-value") as HTMLSpanElement;
   // Toggle hotkey UI - disabled for now
@@ -707,6 +722,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       await invoke("set_restore_clipboard", { enabled: restoreClipboardCheckbox.checked });
     } catch (error) {
       console.error("Failed to set restore clipboard:", error);
+    }
+  });
+
+  agcCheckbox.addEventListener("change", async () => {
+    const enabled = agcCheckbox.checked;
+    applyAgcState(enabled);
+    try {
+      await invoke("set_agc_enabled", { enabled });
+    } catch (error) {
+      console.error("Failed to set AGC enabled:", error);
     }
   });
 

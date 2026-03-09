@@ -73,6 +73,9 @@ pub struct ConfigValues {
     /// Microphone input gain in dB (−20.0 to +20.0 dB, default 0.0)
     #[serde(default = "default_mic_gain")]
     pub mic_gain: f32,
+    /// Whether Automatic Gain Control is enabled (default: true)
+    #[serde(default = "default_agc_enabled")]
+    pub agc_enabled: bool,
     /// Preferred primary audio input device ID
     #[serde(default)]
     pub preferred_source1_id: Option<String>,
@@ -92,6 +95,9 @@ fn default_restore_clipboard_enabled() -> bool {
 }
 fn default_mic_gain() -> f32 {
     0.0
+}
+fn default_agc_enabled() -> bool {
+    true
 }
 
 /// Push-to-talk status information.

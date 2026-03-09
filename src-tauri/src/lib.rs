@@ -330,6 +330,9 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent, is_ptt_mode
         EngineEvent::PlaybackComplete => {
             // No playback UI; ignore.
         }
+        EngineEvent::AgcGainChanged(gain_db) => {
+            let _ = app_handle.emit("agc-gain-changed", gain_db);
+        }
     }
 }
 
@@ -597,6 +600,7 @@ async fn get_config() -> Result<ConfigValues, String> {
         auto_paste_delay_ms: config.auto_paste_delay_ms,
         restore_clipboard_enabled: config.restore_clipboard_enabled,
         mic_gain: config.mic_gain,
+        agc_enabled: config.agc_enabled,
         preferred_source1_id: config.preferred_source1_id,
         preferred_source2_id: config.preferred_source2_id,
     })
@@ -617,6 +621,22 @@ async fn set_mic_gain(engine: State<'_, EngineState>, gain: f32) -> Result<(), S
     config.mic_gain = gain;
     config.save().map_err(|e| format!("Failed to save config: {}", e))?;
     engine.engine.set_mic_gain(gain);
+    Ok(())
+}
+
+/// Enable or disable Automatic Gain Control.
+///
+/// When `enabled` is `true`, the engine AGC stage is active and manual mic
+/// gain control should be treated as disabled in the UI. When `false`, AGC is
+/// bypassed and the manual `mic_gain` setting takes effect.
+#[tauri::command]
+async fn set_agc_enabled(engine: State<'_, EngineState>, enabled: bool) -> Result<(), String> {
+    let mut config = Config::load();
+    config.agc_enabled = enabled;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    let mut agc = engine.engine.agc_config();
+    agc.enabled = enabled;
+    engine.engine.set_agc_config(agc);
     Ok(())
 }
 
@@ -1385,6 +1405,7 @@ pub fn run() {
             get_config,
             set_restore_clipboard,
             set_mic_gain,
+            set_agc_enabled,
             start_recording,
             stop_recording,
             is_recording,
@@ -1452,6 +1473,9 @@ fn build_engine_config(config: &Config) -> EngineConfig {
     // Apply FlowSTT app-config overrides that affect engine behaviour
     engine_config.recording_mode = config.recording_mode;
     engine_config.mic_gain_db = config.mic_gain;
+    // Apply AGC config: preserve any engine-persisted AGC parameters (target
+    // level, attack/release times, etc.) but always use FlowSTT's enabled flag.
+    engine_config.agc.enabled = config.agc_enabled;
     // word_break_segmentation_enabled defaults to true in EngineConfig::default()
     engine_config
 }
