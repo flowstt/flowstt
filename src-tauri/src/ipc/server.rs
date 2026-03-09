@@ -170,9 +170,22 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
         }
 
         Request::SetSources { source1_id, source2_id } => {
-            match engine.start_capture(source1_id, source2_id).await {
-                Ok(()) => Response::Ok,
-                Err(e) => Response::error(e),
+            // Persist the new sources to config
+            let mut config = Config::load();
+            config.preferred_source1_id = source1_id.clone();
+            config.preferred_source2_id = source2_id.clone();
+            if let Err(e) = config.save() {
+                return Response::error(format!("Failed to save config: {}", e));
+            }
+
+            // In PTT mode, don't start capture — it opens on PTT press
+            if config.transcription_mode == flowstt_common::TranscriptionMode::PushToTalk {
+                Response::Ok
+            } else {
+                match engine.start_capture(source1_id, source2_id).await {
+                    Ok(()) => Response::Ok,
+                    Err(e) => Response::error(e),
+                }
             }
         }
 

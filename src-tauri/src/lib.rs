@@ -346,12 +346,16 @@ async fn list_all_sources(engine: State<'_, EngineState>) -> Result<Vec<AudioDev
     Ok(devices)
 }
 
-/// Set audio sources and start capture (persists selection to config)
+/// Set audio sources and start capture (persists selection to config).
+///
+/// In PTT mode, the new sources are saved and pushed to the hotkey listener
+/// but capture is not started — it opens on the next PTT press.
 #[tauri::command]
 async fn set_sources(
     source1_id: Option<String>,
     source2_id: Option<String>,
     engine: State<'_, EngineState>,
+    app_state: State<'_, AppState>,
 ) -> Result<(), String> {
     // Persist the selected device IDs so they survive restart
     let mut config = Config::load();
@@ -361,7 +365,17 @@ async fn set_sources(
         .save()
         .map_err(|e| format!("Failed to save config: {}", e))?;
 
-    engine.engine.start_capture(source1_id, source2_id).await
+    let is_ptt = config.transcription_mode == TranscriptionMode::PushToTalk;
+    if is_ptt {
+        // Update the running hotkey listener's source config; capture
+        // will use these IDs on the next PTT press.
+        if let Some(ref listener) = *app_state.hotkey_listener.lock().await {
+            listener.update_sources(source1_id, source2_id);
+        }
+        Ok(())
+    } else {
+        engine.engine.start_capture(source1_id, source2_id).await
+    }
 }
 
 /// Set echo cancellation enabled/disabled (persisted via config)
@@ -468,7 +482,15 @@ async fn set_transcription_mode(
     let mut config = Config::load();
     config.transcription_mode = mode;
     config.save().map_err(|e| format!("Failed to save config: {}", e))?;
-    apply_transcription_mode(mode, &engine.engine, &app_state, &config.ptt_hotkeys, Some(&app_handle)).await;
+    apply_transcription_mode(
+        mode,
+        &engine.engine,
+        &app_state,
+        &config.ptt_hotkeys,
+        config.preferred_source1_id.clone(),
+        config.preferred_source2_id.clone(),
+        Some(&app_handle),
+    ).await;
     Ok(())
 }
 
@@ -527,7 +549,15 @@ async fn toggle_auto_mode(
     };
     let new_mode = config.transcription_mode;
     config.save().map_err(|e| format!("Failed to save config: {}", e))?;
-    apply_transcription_mode(new_mode, &engine.engine, &app_state, &config.ptt_hotkeys, Some(&app_handle)).await;
+    apply_transcription_mode(
+        new_mode,
+        &engine.engine,
+        &app_state,
+        &config.ptt_hotkeys,
+        config.preferred_source1_id.clone(),
+        config.preferred_source2_id.clone(),
+        Some(&app_handle),
+    ).await;
     Ok(new_mode)
 }
 
@@ -538,6 +568,8 @@ async fn apply_transcription_mode(
     engine: &Arc<AudioEngine>,
     app_state: &AppState,
     ptt_hotkeys: &[HotkeyCombination],
+    source1_id: Option<String>,
+    source2_id: Option<String>,
     app_handle: Option<&AppHandle>,
 ) {
     // Update the shared mode so the event-forwarder task can read it.
@@ -553,6 +585,11 @@ async fn apply_transcription_mode(
             engine.stop_recording();
             engine.set_transcription_enabled(false);
 
+            // Close the mic — in PTT mode, capture is scoped to key hold
+            if let Err(e) = engine.stop_capture().await {
+                warn!("[Mode] stop_capture on PTT switch: {}", e);
+            }
+
             // Reset tray icon to non-recording since PTT is not being held
             if let Some(ah) = app_handle {
                 tray::update_tray_icon(ah, false);
@@ -560,13 +597,21 @@ async fn apply_transcription_mode(
 
             // Start hotkey listener if not already running
             if listener_lock.is_none() {
+                let runtime_handle = tauri::async_runtime::handle();
                 let listener = hotkey::HotkeyListener::start(
                     engine.clone(),
                     ptt_hotkeys.to_vec(),
+                    source1_id,
+                    source2_id,
+                    runtime_handle,
                 );
                 *listener_lock = Some(listener);
                 info!("[Mode] Switched to PTT — hotkey listener started");
             } else {
+                // Listener already running — update its source config
+                if let Some(ref listener) = *listener_lock {
+                    listener.update_sources(source1_id, source2_id);
+                }
                 info!("[Mode] Switched to PTT — hotkey listener already running");
             }
         }
@@ -577,6 +622,13 @@ async fn apply_transcription_mode(
             }
             engine.stop_recording();
             engine.set_transcription_enabled(true);
+
+            // Open capture so VAD can run continuously
+            if source1_id.is_some() {
+                if let Err(e) = engine.start_capture(source1_id, source2_id).await {
+                    error!("[Mode] start_capture on Automatic switch: {}", e);
+                }
+            }
 
             // Tray icon reflects capture state in automatic mode
             if let Some(ah) = app_handle {
@@ -741,9 +793,14 @@ async fn complete_setup(
         .save()
         .map_err(|e| format!("Failed to save config: {}", e))?;
 
-    // Start capture with selected sources
-    if source1_id.is_some() || source2_id.is_some() {
-        engine.engine.start_capture(source1_id, source2_id).await?;
+    // In PTT mode, skip starting capture — it opens on PTT press.
+    // In automatic mode, start capture so VAD can run continuously.
+    let is_ptt = transcription_mode == TranscriptionMode::PushToTalk;
+    if !is_ptt && (source1_id.is_some() || source2_id.is_some()) {
+        engine
+            .engine
+            .start_capture(source1_id.clone(), source2_id.clone())
+            .await?;
     }
 
     // Apply transcription mode (starts hotkey listener for PTT, enables VAD
@@ -753,6 +810,8 @@ async fn complete_setup(
         &engine.engine,
         &app_state,
         &hotkeys,
+        source1_id,
+        source2_id,
         Some(&app_handle),
     )
     .await;
@@ -1251,46 +1310,62 @@ pub fn run() {
                     info!("[Startup] PTT mode — VAD transcription disabled");
                 }
 
-                tauri::async_runtime::block_on(async move {
-                    let input_devices = engine_clone.list_input_devices();
-                    info!(
-                        "[Startup] {} input device(s) available, preferred_source1_id={:?}",
-                        input_devices.len(),
-                        config.preferred_source1_id,
-                    );
-                    let source1_id = if let Some(pref) = config.preferred_source1_id.as_deref() {
-                        input_devices.iter().find(|d| d.id == pref).map(|d| d.id.clone())
-                            .or_else(|| {
-                                warn!("[Startup] Preferred source1 '{}' not found, falling back", pref);
-                                input_devices.first().map(|d| d.id.clone())
-                            })
-                    } else {
-                        input_devices.first().map(|d| d.id.clone())
-                    };
+                // Resolve source device IDs (device listing is synchronous)
+                let input_devices = engine_clone.list_input_devices();
+                info!(
+                    "[Startup] {} input device(s) available, preferred_source1_id={:?}",
+                    input_devices.len(),
+                    config.preferred_source1_id,
+                );
+                let source1_id = if let Some(pref) = config.preferred_source1_id.as_deref() {
+                    input_devices.iter().find(|d| d.id == pref).map(|d| d.id.clone())
+                        .or_else(|| {
+                            warn!("[Startup] Preferred source1 '{}' not found, falling back", pref);
+                            input_devices.first().map(|d| d.id.clone())
+                        })
+                } else {
+                    input_devices.first().map(|d| d.id.clone())
+                };
 
-                    let source2_id = config.preferred_source2_id.as_deref().and_then(|pref| {
-                        engine_clone.list_system_devices()
-                            .into_iter()
-                            .find(|d| d.id == pref)
-                            .map(|d| d.id)
-                    });
-
-                    if let Some(ref s1) = source1_id {
-                        info!("[Startup] Starting capture with source1={}, source2={:?}", s1, source2_id);
-                        match engine_clone.start_capture(source1_id, source2_id).await {
-                            Ok(()) => info!("[Startup] Auto-capture started successfully"),
-                            Err(e) => error!("[Startup] Auto-capture failed: {}", e),
-                        }
-                    } else {
-                        warn!("[Startup] No audio input devices found — PTT will not work");
-                    }
+                let source2_id = config.preferred_source2_id.as_deref().and_then(|pref| {
+                    engine_clone.list_system_devices()
+                        .into_iter()
+                        .find(|d| d.id == pref)
+                        .map(|d| d.id)
                 });
 
-                // Start global hotkey listener for PTT
+                // In PTT mode, skip starting capture — the mic opens on PTT
+                // press and closes on release.  In automatic mode, start
+                // capture now so VAD can run continuously.
+                if !is_ptt {
+                    if let Some(ref s1) = source1_id {
+                        info!("[Startup] Starting capture with source1={}, source2={:?}", s1, source2_id);
+                        let s1c = source1_id.clone();
+                        let s2c = source2_id.clone();
+                        tauri::async_runtime::block_on(async move {
+                            match engine_clone.start_capture(s1c, s2c).await {
+                                Ok(()) => info!("[Startup] Auto-capture started successfully"),
+                                Err(e) => error!("[Startup] Auto-capture failed: {}", e),
+                            }
+                        });
+                    } else {
+                        warn!("[Startup] No audio input devices found");
+                    }
+                } else {
+                    info!("[Startup] PTT mode — capture deferred until hotkey press");
+                }
+
+                // Start global hotkey listener for PTT, passing source IDs
+                // and a Tokio runtime handle so it can call start_capture/
+                // stop_capture from the synchronous hotkey OS thread.
                 if is_ptt {
+                    let runtime_handle = tauri::async_runtime::handle();
                     let listener = hotkey::HotkeyListener::start(
                         engine.clone(),
                         config.ptt_hotkeys.clone(),
+                        source1_id,
+                        source2_id,
+                        runtime_handle,
                     );
                     let app_state: State<AppState> = app.state();
                     *tauri::async_runtime::block_on(app_state.hotkey_listener.lock()) =

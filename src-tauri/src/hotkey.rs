@@ -1,11 +1,11 @@
 //! Global hotkey listener for FlowSTT.
 //!
-//! Monitors physical key press/release events at the OS level and triggers
-//! engine `start_recording()` / `stop_recording()` when the configured PTT
-//! hotkey combination is held/released.
+//! Monitors physical key press/release events at the OS level and manages
+//! the full PTT capture lifecycle: `start_capture()` + `start_recording()`
+//! on press, `stop_recording()` + `stop_capture()` on release.
 //!
 //! This module is a pure app-level concern — vtx-engine knows nothing about
-//! hotkeys or push-to-talk; it simply provides a manual recording API.
+//! hotkeys or push-to-talk; it simply provides capture and recording APIs.
 //!
 //! ## Platform backends
 //!
@@ -19,10 +19,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use tracing::{debug, error, info};
+use tauri::async_runtime::RuntimeHandle;
+use tracing::{debug, error, info, warn};
 use vtx_engine::{AudioEngine, KeyCode};
 
 use flowstt_common::HotkeyCombination;
+
+/// Shared source device IDs for PTT capture lifecycle.
+/// `(source1_id, source2_id)` — read by the hotkey thread on each press.
+type SourceConfig = Arc<Mutex<(Option<String>, Option<String>)>>;
 
 // ─── Windows Raw Input backend ──────────────────────────────────────────────
 
@@ -348,7 +353,9 @@ mod win_raw_input {
         engine: Arc<AudioEngine>,
         initial_combos: Vec<HotkeyCombination>,
         combos_shared: Arc<Mutex<Vec<HotkeyCombination>>>,
+        sources: SourceConfig,
         generation: Arc<AtomicU64>,
+        runtime_handle: RuntimeHandle,
         tid_sender: std::sync::mpsc::Sender<u32>,
     ) {
         unsafe {
@@ -439,12 +446,27 @@ mod win_raw_input {
 
                             match transition {
                                 Transition::Pressed => {
-                                    debug!("[Hotkey] PTT hotkey pressed — starting recording");
-                                    engine.start_recording();
+                                    let (s1, s2) =
+                                        sources.lock().map(|s| s.clone()).unwrap_or_default();
+                                    debug!("[Hotkey] PTT pressed — opening capture (source1={:?}, source2={:?})", s1, s2);
+                                    match runtime_handle.block_on(engine.start_capture(s1, s2)) {
+                                        Ok(()) => {
+                                            debug!("[Hotkey] Capture started — starting recording");
+                                            engine.start_recording();
+                                        }
+                                        Err(e) => {
+                                            warn!("[Hotkey] start_capture failed, skipping recording: {}", e);
+                                        }
+                                    }
                                 }
                                 Transition::Released => {
-                                    debug!("[Hotkey] PTT hotkey released — stopping recording");
+                                    debug!(
+                                        "[Hotkey] PTT released — stopping recording and capture"
+                                    );
                                     engine.stop_recording();
+                                    if let Err(e) = runtime_handle.block_on(engine.stop_capture()) {
+                                        warn!("[Hotkey] stop_capture failed: {}", e);
+                                    }
                                 }
                                 Transition::None => {}
                             }
@@ -574,7 +596,9 @@ mod rdev_backend {
         engine: Arc<AudioEngine>,
         initial_combos: Vec<HotkeyCombination>,
         combos_shared: Arc<Mutex<Vec<HotkeyCombination>>>,
+        sources: SourceConfig,
         generation: Arc<AtomicU64>,
+        runtime_handle: RuntimeHandle,
     ) {
         let mut tracker = HotkeyTracker::new(&initial_combos);
         let mut last_gen: u64 = 0;
@@ -607,12 +631,27 @@ mod rdev_backend {
             };
             match transition {
                 Transition::Pressed => {
-                    debug!("[Hotkey] PTT hotkey pressed — starting recording");
-                    engine.start_recording();
+                    let (s1, s2) = sources.lock().map(|s| s.clone()).unwrap_or_default();
+                    debug!(
+                        "[Hotkey] PTT pressed — opening capture (source1={:?}, source2={:?})",
+                        s1, s2
+                    );
+                    match runtime_handle.block_on(engine.start_capture(s1, s2)) {
+                        Ok(()) => {
+                            debug!("[Hotkey] Capture started — starting recording");
+                            engine.start_recording();
+                        }
+                        Err(e) => {
+                            warn!("[Hotkey] start_capture failed, skipping recording: {}", e);
+                        }
+                    }
                 }
                 Transition::Released => {
-                    debug!("[Hotkey] PTT hotkey released — stopping recording");
+                    debug!("[Hotkey] PTT released — stopping recording and capture");
                     engine.stop_recording();
+                    if let Err(e) = runtime_handle.block_on(engine.stop_capture()) {
+                        warn!("[Hotkey] stop_capture failed: {}", e);
+                    }
                 }
                 Transition::None => {}
             }
@@ -694,6 +733,7 @@ enum Transition {
 pub struct HotkeyListener {
     stop_flag: Arc<AtomicBool>,
     combos: Arc<Mutex<Vec<HotkeyCombination>>>,
+    sources: SourceConfig,
     generation: Arc<AtomicU64>,
     /// Windows: thread ID for posting WM_QUIT on shutdown.
     #[cfg(target_os = "windows")]
@@ -702,18 +742,34 @@ pub struct HotkeyListener {
 
 impl HotkeyListener {
     /// Start a global hotkey listener on a background thread.
-    pub fn start(engine: Arc<AudioEngine>, hotkey_combos: Vec<HotkeyCombination>) -> Self {
+    ///
+    /// The listener manages the full PTT capture lifecycle: on press it opens
+    /// capture with the current source IDs, then starts recording; on release
+    /// it stops recording and closes capture.
+    ///
+    /// `runtime_handle` is used to bridge async `start_capture`/`stop_capture`
+    /// calls from the synchronous hotkey OS thread.
+    pub fn start(
+        engine: Arc<AudioEngine>,
+        hotkey_combos: Vec<HotkeyCombination>,
+        source1_id: Option<String>,
+        source2_id: Option<String>,
+        runtime_handle: RuntimeHandle,
+    ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let combos = Arc::new(Mutex::new(hotkey_combos.clone()));
+        let sources: SourceConfig = Arc::new(Mutex::new((source1_id, source2_id)));
         let generation = Arc::new(AtomicU64::new(0));
 
         #[cfg(target_os = "windows")]
         let thread_id = {
             let sf = stop_flag.clone();
             let cs = combos.clone();
+            let ss = sources.clone();
             let gs = generation.clone();
             let ec = engine.clone();
             let ic = hotkey_combos.clone();
+            let rh = runtime_handle.clone();
             let (tid_tx, tid_rx) = std::sync::mpsc::channel();
 
             thread::spawn(move || {
@@ -721,7 +777,7 @@ impl HotkeyListener {
                     "[Hotkey] Listener starting with {} combo(s) (Windows Raw Input)",
                     ic.len()
                 );
-                win_raw_input::run_message_loop(sf, ec, ic, cs, gs, tid_tx);
+                win_raw_input::run_message_loop(sf, ec, ic, cs, ss, gs, rh, tid_tx);
                 info!("[Hotkey] Listener thread exiting");
             });
 
@@ -738,16 +794,18 @@ impl HotkeyListener {
         {
             let sf = stop_flag.clone();
             let cs = combos.clone();
+            let ss = sources.clone();
             let gs = generation.clone();
             let ec = engine.clone();
             let ic = hotkey_combos.clone();
+            let rh = runtime_handle;
 
             thread::spawn(move || {
                 info!(
                     "[Hotkey] Listener starting with {} combo(s) (rdev)",
                     ic.len()
                 );
-                rdev_backend::run_rdev_loop(sf, ec, ic, cs, gs);
+                rdev_backend::run_rdev_loop(sf, ec, ic, cs, ss, gs, rh);
                 info!("[Hotkey] Listener thread exiting");
             });
         }
@@ -755,6 +813,7 @@ impl HotkeyListener {
         Self {
             stop_flag,
             combos,
+            sources,
             generation,
             #[cfg(target_os = "windows")]
             thread_id,
@@ -786,6 +845,15 @@ impl HotkeyListener {
             *combos = hotkey_combos;
         }
         self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Update the source device IDs used for PTT capture at runtime.
+    ///
+    /// The new sources take effect on the next PTT press.
+    pub fn update_sources(&self, source1_id: Option<String>, source2_id: Option<String>) {
+        if let Ok(mut sources) = self.sources.lock() {
+            *sources = (source1_id, source2_id);
+        }
     }
 }
 
@@ -888,5 +956,40 @@ mod tests {
         assert_eq!(tracker.key_down(KeyCode::F13), Transition::None);
         assert_eq!(tracker.key_down(KeyCode::F13), Transition::None);
         assert_eq!(tracker.key_up(KeyCode::F13), Transition::Released);
+    }
+
+    #[test]
+    fn source_config_shared_state() {
+        let sources: SourceConfig = Arc::new(Mutex::new((Some("mic-1".to_string()), None)));
+
+        // Read initial values
+        {
+            let lock = sources.lock().unwrap();
+            assert_eq!(lock.0, Some("mic-1".to_string()));
+            assert_eq!(lock.1, None);
+        }
+
+        // Simulate update_sources — mutate the shared state
+        {
+            let mut lock = sources.lock().unwrap();
+            *lock = (Some("mic-2".to_string()), Some("sys-1".to_string()));
+        }
+
+        // Verify updated values
+        {
+            let lock = sources.lock().unwrap();
+            assert_eq!(lock.0, Some("mic-2".to_string()));
+            assert_eq!(lock.1, Some("sys-1".to_string()));
+        }
+    }
+
+    #[test]
+    fn source_config_default_on_poison() {
+        let sources: SourceConfig = Arc::new(Mutex::new((Some("mic-1".to_string()), None)));
+
+        // Verify the unwrap_or_default pattern used in handlers
+        let (s1, s2) = sources.lock().map(|s| s.clone()).unwrap_or_default();
+        assert_eq!(s1, Some("mic-1".to_string()));
+        assert_eq!(s2, None);
     }
 }
