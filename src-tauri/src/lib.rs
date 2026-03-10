@@ -1283,6 +1283,15 @@ pub fn run() {
                 warn!("[FlowSTT] Failed to set up system tray: {}", e);
             }
 
+            // On macOS, ensure the main window has no native title bar.
+            // transparent: true is set in tauri.conf.json so the OS composites
+            // the CSS border-radius correctly; set_title_bar_style ensures the
+            // NSWindow frame is fully hidden on top of decorations: false.
+            #[cfg(target_os = "macos")]
+            if let Some(main_win) = app.get_webview_window("main") {
+                let _ = main_win.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+            }
+
             // Restore always-on-top state from config
             {
                 let config = Config::load();
