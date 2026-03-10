@@ -71,11 +71,6 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .icon(icon)
         .menu(&menu)
         .tooltip("FlowSTT")
-        .on_tray_icon_event(|tray, event| {
-            if let tauri::tray::TrayIconEvent::Click { .. } = event {
-                show_main_window(tray.app_handle());
-            }
-        })
         .on_menu_event(move |app, event| {
             handle_menu_event(app, &event, &always_on_top_item_clone);
         })
@@ -144,9 +139,12 @@ fn toggle_always_on_top(
 
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        let visible = window.is_visible().unwrap_or(false);
+        if !visible {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
     } else {
         recreate_main_window(app);
     }
