@@ -7,7 +7,7 @@ description = "Shared types and IPC protocol for FlowSTT"
 [dependencies]
 # vtx-engine re-exports all shared types (AudioDevice, KeyCode, HotkeyCombination, etc.)
 # from vtx_engine::common — there is no separate vtx-common crate.
-vtx-engine = "0.2.0"
+vtx-engine = "0.2.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
