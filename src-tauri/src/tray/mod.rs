@@ -91,6 +91,13 @@ pub fn update_tray_icon(app_handle: &tauri::AppHandle, recording: bool) {
 
     if let Some(icon) = icon {
         if let Some(tray) = app_handle.tray_by_id("main-tray") {
+            // On macOS, set the template flag before swapping the icon to avoid
+            // a race condition in the underlying tray-icon crate where a separate
+            // set_icon_as_template call can arrive out of order.
+            #[cfg(target_os = "macos")]
+            if let Err(e) = tray.set_icon_as_template(true) {
+                warn!("[Tray] Failed to set icon as template: {}", e);
+            }
             if let Err(e) = tray.set_icon(Some(icon)) {
                 warn!("[Tray] Failed to update tray icon: {}", e);
             }

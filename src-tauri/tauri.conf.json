@@ -55,7 +55,8 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "resources": {
-      "icons/tray/*": "icons/tray/"
+      "icons/tray/*": "icons/tray/",
+      "icons/tray/macos/*": "icons/tray/macos/"
     },
     "windows": {
       "nsis": {

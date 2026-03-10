@@ -69,6 +69,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let _tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
+        .icon_as_template(true)
         .menu(&menu)
         .tooltip("FlowSTT")
         .on_menu_event(move |app, event| {
@@ -217,13 +218,26 @@ fn load_tray_icon_from_paths(
     icon_name: &str,
 ) -> Option<Image<'static>> {
     let resource_dir_clone = resource_dir.clone();
+    let resource_dir_clone2 = resource_dir_clone.clone();
     let icon_paths = [
-        resource_dir.map(|p| p.join(format!("icons/tray/{}", icon_name))),
-        resource_dir_clone.map(|p| p.join(format!("icons/{}", icon_name))),
+        // macOS-specific monochromatic template icons (preferred)
+        resource_dir.map(|p| p.join(format!("icons/tray/macos/{}", icon_name))),
+        resource_dir_clone.map(|p| p.join(format!("icons/tray/{}", icon_name))),
+        resource_dir_clone2.map(|p| p.join(format!("icons/{}", icon_name))),
+        Some(PathBuf::from(format!("icons/tray/macos/{}", icon_name))),
+        Some(PathBuf::from(format!(
+            "src-tauri/icons/tray/macos/{}",
+            icon_name
+        ))),
         Some(PathBuf::from(format!("icons/tray/{}", icon_name))),
         Some(PathBuf::from(format!("src-tauri/icons/tray/{}", icon_name))),
         Some(PathBuf::from(format!("icons/{}", icon_name))),
         Some(PathBuf::from(format!("src-tauri/icons/{}", icon_name))),
+        Some(PathBuf::from(format!(
+            "{}/icons/tray/macos/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            icon_name
+        ))),
         Some(PathBuf::from(format!(
             "{}/icons/tray/{}",
             env!("CARGO_MANIFEST_DIR"),
