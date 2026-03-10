@@ -4,8 +4,11 @@
 //! - Windows: windows.rs
 //! - macOS: macos.rs
 
+#[cfg(not(target_os = "macos"))]
 use std::path::PathBuf;
-use tauri::{image::Image, Manager};
+#[cfg(not(target_os = "macos"))]
+use tauri::image::Image;
+use tauri::Manager;
 use tracing::warn;
 
 #[cfg(windows)]
@@ -78,6 +81,21 @@ pub fn update_tray_icon(app_handle: &tauri::AppHandle, recording: bool) {
     };
 
     let resource_dir = app_handle.path().resource_dir().ok();
+
+    // On macOS, prefer the platform-specific loader which checks
+    // icons/tray/macos/ first (monochrome template icons) before falling
+    // back to the generic icons/tray/ directory.
+    #[cfg(target_os = "macos")]
+    let icon = macos::load_tray_icon_from_paths(resource_dir, icon_name).or_else(|| {
+        if recording {
+            None
+        } else {
+            let resource_dir2 = app_handle.path().resource_dir().ok();
+            macos::load_tray_icon_from_paths(resource_dir2, "32x32.png")
+        }
+    });
+
+    #[cfg(not(target_os = "macos"))]
     let icon = load_tray_icon_from_paths(resource_dir, icon_name).or_else(|| {
         if recording {
             // No dedicated recording icon found – keep current icon unchanged.
@@ -111,6 +129,7 @@ pub fn update_tray_icon(app_handle: &tauri::AppHandle, recording: bool) {
 ///
 /// Checks bundled resource paths first (production), then relative and
 /// absolute development paths.
+#[cfg(not(target_os = "macos"))]
 fn load_tray_icon_from_paths(
     resource_dir: Option<PathBuf>,
     icon_name: &str,

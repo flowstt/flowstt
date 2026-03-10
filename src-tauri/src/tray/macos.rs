@@ -213,7 +213,7 @@ fn show_config_window(app: &tauri::AppHandle) {
         .build();
 }
 
-fn load_tray_icon_from_paths(
+pub fn load_tray_icon_from_paths(
     resource_dir: Option<PathBuf>,
     icon_name: &str,
 ) -> Option<Image<'static>> {
