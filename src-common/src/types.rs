@@ -27,8 +27,7 @@ pub enum TranscriptionMode {
 
 // Re-export from vtx-engine so internal modules can use crate-internal types
 pub use vtx_engine::{
-    AudioDevice, AudioSourceType, HistoryEntry, KeyCode, ModelStatus, RecordingMode,
-    TranscriptionResult,
+    AudioDevice, AudioSourceType, HistoryEntry, KeyCode, ModelStatus, TranscriptionResult,
 };
 
 /// Runtime mode - determines behavior for service lifecycle management.

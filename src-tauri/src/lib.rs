@@ -11,7 +11,7 @@ mod tray;
 
 use flowstt_common::config::{Config, LogLevel, ThemeMode};
 use flowstt_common::{
-    runtime_mode, ConfigValues, HotkeyCombination, RecordingMode, RuntimeMode, TranscriptionMode,
+    runtime_mode, ConfigValues, HotkeyCombination, RuntimeMode, TranscriptionMode,
 };
 // All shared audio/transcription types come from vtx_engine (re-exported from
 // vtx_engine::common). There is no separate vtx-common crate.
@@ -365,6 +365,14 @@ async fn set_sources(
         .save()
         .map_err(|e| format!("Failed to save config: {}", e))?;
 
+    // Derive recording mode from the new source2 selection and update the
+    // engine so the next start_capture uses the correct mode.
+    {
+        use vtx_engine::RecordingMode;
+        let mode = if source2_id.is_some() { RecordingMode::EchoCancel } else { RecordingMode::Mixed };
+        engine.engine.set_recording_mode(mode);
+    }
+
     let is_ptt = config.transcription_mode == TranscriptionMode::PushToTalk;
     if is_ptt {
         // Update the running hotkey listener's source config; capture
@@ -376,28 +384,6 @@ async fn set_sources(
     } else {
         engine.engine.start_capture(source1_id, source2_id).await
     }
-}
-
-/// Set echo cancellation enabled/disabled (persisted via config)
-#[tauri::command]
-async fn set_aec_enabled(enabled: bool) -> Result<(), String> {
-    // AEC is now controlled via EngineConfig.recording_mode.
-    // For backward compatibility: enabling AEC sets EchoCancel mode; disabling sets Mixed.
-    let mut config = Config::load();
-    config.recording_mode = if enabled {
-        RecordingMode::EchoCancel
-    } else {
-        RecordingMode::Mixed
-    };
-    config.save().map_err(|e| format!("Failed to save config: {}", e))
-}
-
-/// Set recording mode
-#[tauri::command]
-async fn set_recording_mode(mode: RecordingMode) -> Result<(), String> {
-    let mut config = Config::load();
-    config.recording_mode = mode;
-    config.save().map_err(|e| format!("Failed to save config: {}", e))
 }
 
 /// Check Whisper model status
@@ -1357,12 +1343,52 @@ pub fn run() {
                     input_devices.first().map(|d| d.id.clone())
                 };
 
-                let source2_id = config.preferred_source2_id.as_deref().and_then(|pref| {
-                    engine_clone.list_system_devices()
-                        .into_iter()
-                        .find(|d| d.id == pref)
-                        .map(|d| d.id)
-                });
+                // Resolve source2: prefer the stored device ID; fall back to the
+                // system default output device; warn and use None if unavailable.
+                let system_devices = engine_clone.list_system_devices();
+                let mut config_mut = config.clone();
+                let source2_id: Option<String> = if let Some(pref) = config.preferred_source2_id.as_deref() {
+                    // Saved preference — verify the device is still available.
+                    if let Some(d) = system_devices.iter().find(|d| d.id == pref) {
+                        Some(d.id.clone())
+                    } else {
+                        // Saved device is gone — fall back to the system default.
+                        warn!("[Startup] Preferred source2 '{}' not found, falling back to default", pref);
+                        if let Some(default_dev) = engine_clone.get_default_system_device() {
+                            info!("[Startup] Auto-selected default system device: {} ({})", default_dev.name, default_dev.id);
+                            config_mut.preferred_source2_id = Some(default_dev.id.clone());
+                            if let Err(e) = config_mut.save() {
+                                warn!("[Startup] Failed to persist default source2: {}", e);
+                            }
+                            Some(default_dev.id)
+                        } else {
+                            warn!("[Startup] No system audio devices available; AEC disabled");
+                            None
+                        }
+                    }
+                } else {
+                    // No preference saved — auto-select the default output device.
+                    if let Some(default_dev) = engine_clone.get_default_system_device() {
+                        info!("[Startup] No reference device configured; auto-selecting default system device: {} ({})", default_dev.name, default_dev.id);
+                        config_mut.preferred_source2_id = Some(default_dev.id.clone());
+                        if let Err(e) = config_mut.save() {
+                            warn!("[Startup] Failed to persist default source2: {}", e);
+                        }
+                        Some(default_dev.id)
+                    } else {
+                        warn!("[Startup] No system audio devices available; AEC disabled");
+                        None
+                    }
+                };
+
+                // Derive recording mode from source2 presence and apply it to
+                // the engine so the next start_capture uses the correct mode.
+                {
+                    use vtx_engine::RecordingMode;
+                    let mode = if source2_id.is_some() { RecordingMode::EchoCancel } else { RecordingMode::Mixed };
+                    engine_clone.set_recording_mode(mode);
+                    info!("[Startup] Recording mode: {:?}", mode);
+                }
 
                 // In PTT mode, skip starting capture — the mic opens on PTT
                 // press and closes on release.  In automatic mode, start
@@ -1496,8 +1522,6 @@ pub fn run() {
             download_logs,
             list_all_sources,
             set_sources,
-            set_aec_enabled,
-            set_recording_mode,
             check_model_status,
             download_model,
             get_status,
@@ -1574,10 +1598,12 @@ fn migrate_whisper_model() {
 }
 
 /// Build an EngineConfig from the FlowSTT AppConfig.
+///
+/// Recording mode is NOT set here — it is derived from source2 presence at
+/// runtime and applied via `engine.set_recording_mode()` after device
+/// resolution.
 fn build_engine_config(config: &Config) -> EngineConfig {
     let mut engine_config = EngineConfig::load("FlowSTT").unwrap_or_default();
-    // Apply FlowSTT app-config overrides that affect engine behaviour
-    engine_config.recording_mode = config.recording_mode;
     engine_config.mic_gain_db = config.mic_gain;
     // Apply AGC config: preserve any engine-persisted AGC parameters (target
     // level, attack/release times, etc.) but always use FlowSTT's enabled flag

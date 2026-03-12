@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use vtx_engine::{AudioSourceType, HotkeyCombination, RecordingMode};
+use vtx_engine::{AudioSourceType, HotkeyCombination};
 
 use crate::types::TranscriptionMode;
 
@@ -28,12 +28,6 @@ pub enum Request {
         #[serde(skip_serializing_if = "Option::is_none")]
         source2_id: Option<String>,
     },
-
-    // === Audio Settings ===
-    /// Set acoustic echo cancellation enabled
-    SetAecEnabled { enabled: bool },
-    /// Set recording mode (mixed or echo-cancel)
-    SetRecordingMode { mode: RecordingMode },
 
     // === State Queries ===
     /// Get current transcription status

@@ -20,7 +20,7 @@ pub use config::ThemeMode;
 // All shared types (AudioDevice, KeyCode, etc.) are defined in vtx_engine::common
 // and re-exported at the vtx_engine crate root — there is no separate vtx-common crate.
 pub use vtx_engine::{
-    AudioDevice, AudioSourceType, HotkeyCombination, KeyCode, RecordingMode,
+    AudioDevice, AudioSourceType, HotkeyCombination, KeyCode,
     TranscriptionResult, ModelStatus, HistoryEntry,
 };
 

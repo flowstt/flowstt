@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use flowstt_common::config::Config;
 use flowstt_common::ipc::{EventType, Request, Response};
-use flowstt_common::{runtime_mode, AudioSourceType, ConfigValues, HotkeyCombination, KeyCode, RecordingMode, TranscriptionMode};
+use flowstt_common::{runtime_mode, AudioSourceType, ConfigValues, HotkeyCombination, KeyCode, TranscriptionMode};
 // TranscriptionMode is now defined in flowstt_common (app-level concept, not vtx-engine)
 
 use client::Client;
@@ -58,17 +58,10 @@ enum Commands {
         #[arg(short = '1', long)]
         source1: Option<String>,
 
-        /// Secondary audio source ID for mixing or AEC
+        /// Secondary audio source ID (system/loopback device for echo cancellation).
+        /// When set, echo cancellation is applied automatically.
         #[arg(short = '2', long)]
         source2: Option<String>,
-
-        /// Enable acoustic echo cancellation
-        #[arg(long)]
-        aec: bool,
-
-        /// Recording mode (mix or echo-cancel)
-        #[arg(short, long, default_value = "mixed")]
-        mode: RecordingModeArg,
     },
 
     /// Get current transcription status
@@ -113,12 +106,6 @@ enum Commands {
 enum SourceFilter {
     Input,
     System,
-}
-
-#[derive(Clone, ValueEnum)]
-enum RecordingModeArg {
-    Mixed,
-    EchoCancel,
 }
 
 #[derive(Subcommand)]
@@ -270,12 +257,7 @@ async fn run_command(client: &mut Client, cli: &Cli) -> Result<(), CliError> {
             }
         }
 
-        Commands::Transcribe {
-            source1,
-            source2,
-            aec,
-            mode,
-        } => {
+        Commands::Transcribe { source1, source2 } => {
             if source1.is_none() && source2.is_none() {
                 return Err(
                     "At least one audio source is required. Use 'flowstt list' to see devices."
@@ -283,24 +265,8 @@ async fn run_command(client: &mut Client, cli: &Cli) -> Result<(), CliError> {
                 );
             }
 
-            let recording_mode = match mode {
-                RecordingModeArg::Mixed => RecordingMode::Mixed,
-                RecordingModeArg::EchoCancel => RecordingMode::EchoCancel,
-            };
-
-            // Set AEC and recording mode first
-            if *aec {
-                let _ = client
-                    .request(Request::SetAecEnabled { enabled: true })
-                    .await;
-            }
-            let _ = client
-                .request(Request::SetRecordingMode {
-                    mode: recording_mode,
-                })
-                .await;
-
-            // Set sources - this starts capture automatically
+            // Set sources - this starts capture automatically.
+            // Echo cancellation is applied automatically when source2 is set.
             let response = client
                 .request(Request::SetSources {
                     source1_id: source1.clone(),

@@ -304,28 +304,6 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
             }
         }
 
-        Request::SetAecEnabled { enabled } => {
-            let mut config = Config::load();
-            config.recording_mode = if enabled {
-                vtx_engine::RecordingMode::EchoCancel
-            } else {
-                vtx_engine::RecordingMode::Mixed
-            };
-            match config.save() {
-                Ok(()) => Response::Ok,
-                Err(e) => Response::error(format!("Failed to save config: {}", e)),
-            }
-        }
-
-        Request::SetRecordingMode { mode } => {
-            let mut config = Config::load();
-            config.recording_mode = mode;
-            match config.save() {
-                Ok(()) => Response::Ok,
-                Err(e) => Response::error(format!("Failed to save config: {}", e)),
-            }
-        }
-
         Request::SetAutoPaste { enabled } => {
             let mut config = Config::load();
             config.auto_paste_enabled = enabled;

@@ -10,7 +10,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use vtx_engine::{HotkeyCombination, KeyCode, RecordingMode};
+use vtx_engine::{HotkeyCombination, KeyCode};
 
 use crate::types::TranscriptionMode;
 
@@ -88,9 +88,6 @@ pub struct Config {
     /// Microphone input gain in dB applied before VAD and transcription (−20.0 to +20.0 dB, default 0.0)
     #[serde(default = "default_mic_gain")]
     pub mic_gain: f32,
-    /// Recording mode: Mixed combines both streams; EchoCancel outputs only echo-cancelled primary
-    #[serde(default)]
-    pub recording_mode: RecordingMode,
     /// Whether Automatic Gain Control is enabled (default: true).
     ///
     /// When `true`, the engine AGC stage continuously adjusts gain to maintain
@@ -256,7 +253,6 @@ impl Config {
             log_level: LogLevel::default(),
             restore_clipboard_enabled: true,
             mic_gain: 0.0,
-            recording_mode: RecordingMode::default(),
             agc_enabled: true,
             agc_noise_gate_enabled: true,
         }
@@ -309,7 +305,6 @@ impl Config {
             log_level: legacy.log_level.unwrap_or_default(),
             restore_clipboard_enabled: legacy.restore_clipboard_enabled.unwrap_or(true),
             mic_gain: legacy.mic_gain.unwrap_or(0.0),
-            recording_mode: RecordingMode::default(),
             agc_enabled: legacy.agc_enabled.unwrap_or(true),
             agc_noise_gate_enabled: legacy.agc_noise_gate_enabled.unwrap_or(true),
         }
