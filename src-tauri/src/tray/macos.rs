@@ -138,7 +138,7 @@ fn toggle_always_on_top(
     let _ = check_item.set_checked(enabled);
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
+pub fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
         if !visible {

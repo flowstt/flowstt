@@ -54,6 +54,7 @@ vtx-engine = "0.2.3"
 flowstt-common = { path = "../src-common" }
 
 tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
 uuid = { version = "1.22.0", features = ["v4"] }
 
 # Desktop-only plugins

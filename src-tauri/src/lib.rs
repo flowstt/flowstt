@@ -1177,6 +1177,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // When a second instance tries to launch, show the main window
+            // as if the user had double-clicked the taskbar icon
+            tray::show_main_window(app);
+        }))
         .manage(AppState {
             ipc_server_handle: Mutex::new(None),
             hotkey_listener: Mutex::new(None),

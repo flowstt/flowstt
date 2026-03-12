@@ -151,7 +151,7 @@ fn toggle_always_on_top(
 }
 
 /// Show the main window, recreating if necessary.
-fn show_main_window(app: &tauri::AppHandle) {
+pub fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         show_and_focus_window(&window);
     } else {

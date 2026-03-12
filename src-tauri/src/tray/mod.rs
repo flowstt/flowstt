@@ -47,13 +47,29 @@ pub mod menu_labels {
 #[cfg(windows)]
 pub use windows::setup_tray;
 
+#[cfg(windows)]
+pub use windows::show_main_window;
+
 #[cfg(target_os = "macos")]
 pub use macos::setup_tray;
+
+#[cfg(target_os = "macos")]
+pub use macos::show_main_window;
 
 /// Linux tray - no-op for now.
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn setup_tray(_app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
+}
+
+/// Show the main window on Linux (simplified implementation).
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 /// Clean up IPC socket file on Unix before exiting.
