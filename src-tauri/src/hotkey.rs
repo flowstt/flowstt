@@ -1090,6 +1090,11 @@ impl HotkeyTracker {
             .iter()
             .map(|h| h.keys.iter().cloned().collect::<HashSet<KeyCode>>())
             .collect();
+        // Re-evaluate was_active against the new combo list and the currently
+        // held keys.  Without this, a stale was_active (from a prior press or
+        // from a phantom held key) would prevent the transition logic from
+        // firing Pressed/Released for any newly-added combo.
+        self.was_active = self.is_active();
     }
 
     fn is_active(&self) -> bool {
@@ -1355,6 +1360,47 @@ mod tests {
         tracker.update_combos(&[combo(&[KeyCode::F14])]);
         assert_eq!(tracker.key_down(KeyCode::F13), Transition::None);
         assert_eq!(tracker.key_up(KeyCode::F13), Transition::None);
+        assert_eq!(tracker.key_down(KeyCode::F14), Transition::Pressed);
+        assert_eq!(tracker.key_up(KeyCode::F14), Transition::Released);
+    }
+
+    /// Adding a secondary combo while was_active is stale must not prevent
+    /// the new combo from firing.  Concretely: press F13 to set was_active=true,
+    /// then release it.  Now add F14 as a second combo — was_active is false and
+    /// is_active() is also false, so the re-sync is a no-op.  Pressing F14 must
+    /// still produce Pressed.  This is the regression test for the bug where
+    /// update_combos did not re-evaluate was_active, leaving it stale if called
+    /// while a key was physically held (the OS can deliver key-ups late or miss
+    /// them entirely), which caused the secondary combo to never fire.
+    #[test]
+    fn update_combos_resyncs_was_active() {
+        let mut tracker = HotkeyTracker::new(&[combo(&[KeyCode::F13])]);
+
+        // Simulate a stuck was_active=true (e.g. a missed key-up from the OS).
+        assert_eq!(tracker.key_down(KeyCode::F13), Transition::Pressed);
+        // was_active is now true; held_keys contains F13.
+
+        // Add a second combo while was_active is still true.
+        tracker.update_combos(&[combo(&[KeyCode::F13]), combo(&[KeyCode::F14])]);
+        // After re-sync: F13 is still held so is_active() remains true →
+        // was_active stays true.  No spurious Released yet.
+
+        // "Release" the stuck key — should emit Released.
+        assert_eq!(tracker.key_up(KeyCode::F13), Transition::Released);
+
+        // Now press the secondary combo — must produce Pressed.
+        assert_eq!(tracker.key_down(KeyCode::F14), Transition::Pressed);
+        assert_eq!(tracker.key_up(KeyCode::F14), Transition::Released);
+    }
+
+    /// Verify update_combos does not emit a spurious Released when was_active
+    /// was false and the new combo list leaves is_active() false.
+    #[test]
+    fn update_combos_no_spurious_released() {
+        let mut tracker = HotkeyTracker::new(&[combo(&[KeyCode::F13])]);
+        // was_active starts false; add a second combo.
+        tracker.update_combos(&[combo(&[KeyCode::F13]), combo(&[KeyCode::F14])]);
+        // Next key event must not produce Released.
         assert_eq!(tracker.key_down(KeyCode::F14), Transition::Pressed);
         assert_eq!(tracker.key_up(KeyCode::F14), Transition::Released);
     }
