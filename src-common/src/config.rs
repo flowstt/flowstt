@@ -98,6 +98,14 @@ pub struct Config {
     /// UI when AGC is on.
     #[serde(default = "default_agc_enabled")]
     pub agc_enabled: bool,
+    /// Whether the AGC noise gate is enabled (default: true).
+    ///
+    /// When `true`, `AgcConfig.gate_threshold_db` is set to -50.0 dBFS, preventing
+    /// the AGC from amplifying background noise during speech pauses. When `false`,
+    /// the threshold is set to -120.0 dBFS (a sentinel below any real-world signal),
+    /// effectively disabling the gate. Only has effect when `agc_enabled` is `true`.
+    #[serde(default = "default_agc_noise_gate_enabled")]
+    pub agc_noise_gate_enabled: bool,
 }
 
 fn default_auto_toggle_hotkeys() -> Vec<HotkeyCombination> {
@@ -121,6 +129,10 @@ fn default_mic_gain() -> f32 {
 }
 
 fn default_agc_enabled() -> bool {
+    true
+}
+
+fn default_agc_noise_gate_enabled() -> bool {
     true
 }
 
@@ -157,6 +169,8 @@ struct LegacyConfig {
     mic_gain: Option<f32>,
     /// AGC enabled (may be absent in old configs — defaults to true on migration)
     agc_enabled: Option<bool>,
+    /// AGC noise gate enabled (may be absent in old configs — defaults to true on migration)
+    agc_noise_gate_enabled: Option<bool>,
 }
 
 impl Config {
@@ -244,6 +258,7 @@ impl Config {
             mic_gain: 0.0,
             recording_mode: RecordingMode::default(),
             agc_enabled: true,
+            agc_noise_gate_enabled: true,
         }
     }
 
@@ -296,6 +311,7 @@ impl Config {
             mic_gain: legacy.mic_gain.unwrap_or(0.0),
             recording_mode: RecordingMode::default(),
             agc_enabled: legacy.agc_enabled.unwrap_or(true),
+            agc_noise_gate_enabled: legacy.agc_noise_gate_enabled.unwrap_or(true),
         }
     }
 }

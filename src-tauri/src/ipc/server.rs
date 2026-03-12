@@ -237,6 +237,7 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
                 restore_clipboard_enabled: config.restore_clipboard_enabled,
                 mic_gain: config.mic_gain,
                 agc_enabled: config.agc_enabled,
+                agc_noise_gate_enabled: config.agc_noise_gate_enabled,
                 preferred_source1_id: config.preferred_source1_id,
                 preferred_source2_id: config.preferred_source2_id,
             })
@@ -362,6 +363,20 @@ async fn handle_request(request: Request, engine: &Arc<AudioEngine>) -> Response
                 Ok(()) => {
                     let mut agc = engine.agc_config();
                     agc.enabled = enabled;
+                    engine.set_agc_config(agc);
+                    Response::Ok
+                }
+                Err(e) => Response::error(format!("Failed to save config: {}", e)),
+            }
+        }
+
+        Request::SetAgcNoiseGateEnabled { enabled } => {
+            let mut config = Config::load();
+            config.agc_noise_gate_enabled = enabled;
+            match config.save() {
+                Ok(()) => {
+                    let mut agc = engine.agc_config();
+                    agc.gate_threshold_db = if enabled { -50.0 } else { -120.0 };
                     engine.set_agc_config(agc);
                     Response::Ok
                 }

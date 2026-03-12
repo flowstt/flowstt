@@ -698,6 +698,7 @@ async fn get_config_values(client: &mut Client) -> Result<ConfigValues, CliError
         restore_clipboard_enabled: config.restore_clipboard_enabled,
         mic_gain: config.mic_gain,
         agc_enabled: config.agc_enabled,
+        agc_noise_gate_enabled: config.agc_noise_gate_enabled,
         preferred_source1_id: config.preferred_source1_id,
         preferred_source2_id: config.preferred_source2_id,
     })

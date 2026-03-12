@@ -76,6 +76,9 @@ pub struct ConfigValues {
     /// Whether Automatic Gain Control is enabled (default: true)
     #[serde(default = "default_agc_enabled")]
     pub agc_enabled: bool,
+    /// Whether the AGC noise gate is enabled (default: true)
+    #[serde(default = "default_agc_noise_gate_enabled")]
+    pub agc_noise_gate_enabled: bool,
     /// Preferred primary audio input device ID
     #[serde(default)]
     pub preferred_source1_id: Option<String>,
@@ -97,6 +100,9 @@ fn default_mic_gain() -> f32 {
     0.0
 }
 fn default_agc_enabled() -> bool {
+    true
+}
+fn default_agc_noise_gate_enabled() -> bool {
     true
 }
 

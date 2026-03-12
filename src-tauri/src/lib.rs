@@ -653,6 +653,7 @@ async fn get_config() -> Result<ConfigValues, String> {
         restore_clipboard_enabled: config.restore_clipboard_enabled,
         mic_gain: config.mic_gain,
         agc_enabled: config.agc_enabled,
+        agc_noise_gate_enabled: config.agc_noise_gate_enabled,
         preferred_source1_id: config.preferred_source1_id,
         preferred_source2_id: config.preferred_source2_id,
     })
@@ -688,6 +689,26 @@ async fn set_agc_enabled(engine: State<'_, EngineState>, enabled: bool) -> Resul
     config.save().map_err(|e| format!("Failed to save config: {}", e))?;
     let mut agc = engine.engine.agc_config();
     agc.enabled = enabled;
+    engine.engine.set_agc_config(agc);
+    Ok(())
+}
+
+/// Enable or disable the AGC noise gate.
+///
+/// When `enabled` is `true`, the AGC noise gate threshold is set to -50.0 dBFS,
+/// preventing the AGC from amplifying background noise during speech pauses.
+/// When `false`, the threshold is set to -120.0 dBFS (a sentinel below any
+/// real-world signal), effectively disabling the gate.
+#[tauri::command]
+async fn set_agc_noise_gate_enabled(
+    engine: State<'_, EngineState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut config = Config::load();
+    config.agc_noise_gate_enabled = enabled;
+    config.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    let mut agc = engine.engine.agc_config();
+    agc.gate_threshold_db = if enabled { -50.0 } else { -120.0 };
     engine.engine.set_agc_config(agc);
     Ok(())
 }
@@ -1490,6 +1511,7 @@ pub fn run() {
             set_restore_clipboard,
             set_mic_gain,
             set_agc_enabled,
+            set_agc_noise_gate_enabled,
             start_recording,
             stop_recording,
             is_recording,
@@ -1558,8 +1580,11 @@ fn build_engine_config(config: &Config) -> EngineConfig {
     engine_config.recording_mode = config.recording_mode;
     engine_config.mic_gain_db = config.mic_gain;
     // Apply AGC config: preserve any engine-persisted AGC parameters (target
-    // level, attack/release times, etc.) but always use FlowSTT's enabled flag.
+    // level, attack/release times, etc.) but always use FlowSTT's enabled flag
+    // and noise gate setting.
     engine_config.agc.enabled = config.agc_enabled;
+    // Noise gate: enabled → -50.0 dBFS (vtx-engine default), disabled → -120.0 dBFS (sentinel)
+    engine_config.agc.gate_threshold_db = if config.agc_noise_gate_enabled { -50.0 } else { -120.0 };
     // word_break_segmentation_enabled defaults to true in EngineConfig::default()
     engine_config
 }

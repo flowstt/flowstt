@@ -40,6 +40,7 @@ interface ConfigValues {
   restore_clipboard_enabled: boolean;
   mic_gain: number;
   agc_enabled: boolean;
+  agc_noise_gate_enabled: boolean;
   preferred_source1_id: string | null;
   preferred_source2_id: string | null;
 }
@@ -180,6 +181,8 @@ let warningEl: HTMLDivElement;
 let addHotkeyBtn: HTMLButtonElement;
 let restoreClipboardCheckbox: HTMLInputElement;
 let agcCheckbox: HTMLInputElement;
+let agcNoiseGateCheckbox: HTMLInputElement;
+let agcNoiseGateField: HTMLDivElement;
 let micGainField: HTMLDivElement;
 let micGainSlider: HTMLInputElement;
 let micGainValueEl: HTMLSpanElement;
@@ -627,6 +630,7 @@ async function loadState() {
     // Audio detection settings
     const agcEnabled = config.agc_enabled ?? true;
     agcCheckbox.checked = agcEnabled;
+    agcNoiseGateCheckbox.checked = config.agc_noise_gate_enabled ?? true;
     applyAgcState(agcEnabled);
 
     const gain = config.mic_gain ?? 0.0;
@@ -643,10 +647,12 @@ async function loadState() {
   }
 }
 
-/** Show/hide and enable/disable the manual gain slider based on AGC state. */
+/** Show/hide and enable/disable the manual gain slider and noise gate based on AGC state. */
 function applyAgcState(agcEnabled: boolean): void {
   micGainField.style.opacity = agcEnabled ? "0.4" : "";
   micGainSlider.disabled = agcEnabled;
+  agcNoiseGateField.style.opacity = agcEnabled ? "" : "0.4";
+  agcNoiseGateCheckbox.disabled = !agcEnabled;
 }
 
 async function onSourceChange() {
@@ -677,6 +683,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   addHotkeyBtn = document.getElementById("add-hotkey-btn") as HTMLButtonElement;
   restoreClipboardCheckbox = document.getElementById("restore-clipboard-checkbox") as HTMLInputElement;
   agcCheckbox = document.getElementById("agc-checkbox") as HTMLInputElement;
+  agcNoiseGateField = document.getElementById("agc-noise-gate-field") as HTMLDivElement;
+  agcNoiseGateCheckbox = document.getElementById("agc-noise-gate-checkbox") as HTMLInputElement;
   micGainField = document.getElementById("mic-gain-field") as HTMLDivElement;
   micGainSlider = document.getElementById("mic-gain-slider") as HTMLInputElement;
   micGainValueEl = document.getElementById("mic-gain-value") as HTMLSpanElement;
@@ -732,6 +740,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       await invoke("set_agc_enabled", { enabled });
     } catch (error) {
       console.error("Failed to set AGC enabled:", error);
+    }
+  });
+
+  agcNoiseGateCheckbox.addEventListener("change", async () => {
+    try {
+      await invoke("set_agc_noise_gate_enabled", { enabled: agcNoiseGateCheckbox.checked });
+    } catch (error) {
+      console.error("Failed to set AGC noise gate enabled:", error);
     }
   });
 

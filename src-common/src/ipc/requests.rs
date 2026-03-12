@@ -97,6 +97,11 @@ pub enum Request {
         /// Whether AGC should be enabled
         enabled: bool,
     },
+    /// Enable or disable the AGC noise gate
+    SetAgcNoiseGateEnabled {
+        /// Whether the AGC noise gate should be enabled
+        enabled: bool,
+    },
     // === History Management ===
     /// Get all transcription history entries
     GetHistory,
