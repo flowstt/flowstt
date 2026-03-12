@@ -15,5 +15,5 @@ resolver = "2"
 #   3. Run `cargo build` — vtx-engine resolves from the local path
 #   4. Re-comment before committing (CI always uses the crates.io version)
 #
-[patch.crates-io]
-vtx-engine = { path = "../../vtx-engine/crates/vtx-engine" }
+# [patch.crates-io]
+# vtx-engine = { path = "../../vtx-engine/crates/vtx-engine" }
