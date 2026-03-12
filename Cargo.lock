@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "flowstt-app"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "chrono",
  "core-foundation 0.10.1",
@@ -1247,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "flowstt-cli"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "clap",
  "colored",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "flowstt-common"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "directories",
  "dirs 5.0.1",
