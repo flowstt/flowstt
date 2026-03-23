@@ -48,6 +48,45 @@ fn configure_wayland_workarounds() {
 #[cfg(not(target_os = "linux"))]
 fn configure_wayland_workarounds() {}
 
+/// Check if text consists entirely of musical note symbols (and whitespace).
+/// Returns true if the transcription should be ignored as music.
+fn is_musical_notes(text: &str) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+    
+    // Musical note Unicode ranges and specific characters
+    text.chars().all(|c| {
+        if c.is_whitespace() {
+            return true;
+        }
+        // Common musical symbols
+        matches!(c,
+            '\u{266A}' |  // ♪ eighth note
+            '\u{266B}' |  // ♫ beamed eighth notes
+            '\u{266C}' |  // ♬ beamed sixteenth notes
+            '\u{2669}' |  // ♩ quarter note
+            '\u{266D}' |  // ♭ flat
+            '\u{266E}' |  // ♮ natural
+            '\u{266F}' |  // ♯ sharp
+            '\u{1D11E}' | // 𝄞 G clef
+            '\u{1D11F}' | // 𝄟 G clef ottava alta
+            '\u{1D120}' | // 𝄠 G clef ottava bassa
+            '\u{1D121}' | // 𝄡 C clef
+            '\u{1D122}' | // 𝄢 F clef
+            '\u{1D123}' | // 𝄣 F clef ottava alta
+            '\u{1D124}' | // 𝄤 F clef ottava bassa
+            '\u{1D125}' | // 𝄥 drum clef
+            '\u{1D126}' | // 𝄦 drum clef (alternate)
+            '\u{1D129}' | // 𝄩 pedal mark
+            '\u{1D12A}' | // 𝄪 double sharp
+            '\u{1D12B}' | // 𝄫 double flat
+            '\u{1D12C}' | // 𝄬 grace note slashed stem up
+            '\u{1D12D}'   // 𝄭 grace note slashed stem down
+        )
+    })
+}
+
 // ─── Log line payload (emitted to frontend) ──────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
@@ -207,6 +246,12 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent, is_ptt_mode
             let _ = app_handle.emit("visualization-data", data);
         }
         EngineEvent::TranscriptionComplete(result) => {
+            // Skip transcriptions that consist entirely of musical notes
+            if is_musical_notes(&result.text) {
+                info!("[Transcription] Ignoring music-only transcription: {}", result.text);
+                return;
+            }
+            
             // vtx-engine emits results without id/timestamp — enrich them
             // here so the frontend and history store have complete records.
             let id = uuid::Uuid::new_v4().to_string();
