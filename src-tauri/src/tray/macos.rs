@@ -5,7 +5,7 @@ use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager, WebviewUrl,
+    ActivationPolicy, Emitter, Manager, WebviewUrl,
 };
 use tracing::{error, warn};
 
@@ -139,6 +139,7 @@ fn toggle_always_on_top(
 }
 
 pub fn show_main_window(app: &tauri::AppHandle) {
+    let _ = app.set_activation_policy(ActivationPolicy::Regular);
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
         if !visible {

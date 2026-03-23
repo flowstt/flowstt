@@ -22,6 +22,8 @@ use std::time::Instant;
 use tauri::webview::WebviewWindowBuilder;
 use tauri::WebviewUrl;
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
@@ -1132,6 +1134,15 @@ fn log_to_file(level: String, message: String) {
     }
 }
 
+#[tauri::command]
+fn hide_main_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(ActivationPolicy::Accessory);
+}
+
 // ─── Window helpers ──────────────────────────────────────────────────────────
 
 pub fn open_log_viewer_window(app: &AppHandle) {
@@ -1464,16 +1475,15 @@ pub fn run() {
                         let _ = setup_win.destroy();
                     }
 
-                    if let Some(main_win) = app_handle_inner.get_webview_window("main") {
-                        let _ = main_win.show();
-                        let _ = main_win.set_focus();
-                    }
+                    tray::show_main_window(&app_handle_inner);
                 });
             } else if headless {
                 info!("[Startup] Headless mode - hiding main window");
                 if let Some(main_win) = app.get_webview_window("main") {
                     let _ = main_win.hide();
                 }
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(ActivationPolicy::Accessory);
             }
 
             // Deferred background update check (release builds only)
@@ -1517,10 +1527,19 @@ pub fn run() {
                     let _ = _window.hide();
                 }
             }
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
+                if _window.label() == "main" {
+                    api.prevent_close();
+                    let _ = _window.hide();
+                    let _ = _window.app_handle().set_activation_policy(ActivationPolicy::Accessory);
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             startup_log,
             log_to_file,
+            hide_main_window,
             get_log_history,
             get_log_level,
             set_log_level,

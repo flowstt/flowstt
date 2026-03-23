@@ -622,8 +622,7 @@ window.addEventListener("DOMContentLoaded", () => {
   closeBtn?.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const mainWindow = getCurrentWindow();
-    await mainWindow.hide();
+    await invoke("hide_main_window");
   });
 
   window.addEventListener("beforeunload", () => {
