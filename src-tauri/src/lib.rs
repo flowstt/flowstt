@@ -380,6 +380,9 @@ fn forward_engine_event(app_handle: &AppHandle, event: &EngineEvent, is_ptt_mode
         EngineEvent::AgcGainChanged(gain_db) => {
             let _ = app_handle.emit("agc-gain-changed", gain_db);
         }
+        EngineEvent::AudioData(_) | EngineEvent::RawAudioData(_) => {
+            // Streaming audio data events - not used by FlowSTT; ignore.
+        }
     }
 }
 
