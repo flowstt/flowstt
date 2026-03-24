@@ -1206,7 +1206,7 @@ pub fn open_log_viewer_window(app: &AppHandle) {
         .min_inner_size(600.0, 400.0)
         .resizable(true)
         .decorations(false)
-        .transparent(false)
+        .transparent(true)
         .shadow(true)
         .skip_taskbar(true)
         .center()
